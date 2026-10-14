@@ -57,7 +57,7 @@ body {
 }
 .md mark.anchor:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 .md mark.anchor.active { background: color-mix(in srgb, var(--accent) 30%, transparent); border-bottom-color: var(--accent); }
-/* One-offs: no fill, dashed underline, so they read as lighter than real side threads */
+/* Unsaved side questions: no fill, dashed underline; saved (in the map) ones are filled */
 .md mark.anchor.oneoff { background: transparent; border-bottom: 1.5px dashed color-mix(in srgb, var(--accent) 70%, transparent); border-radius: 0; }
 .md mark.anchor.oneoff:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .md mark.anchor.oneoff.active { background: color-mix(in srgb, var(--accent) 14%, transparent); border-bottom-color: var(--accent); }

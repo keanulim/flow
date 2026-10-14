@@ -87,7 +87,7 @@ function mark(anchor: Anchor, value: string): Element {
     properties: {
       dataThreadId: anchor.threadId,
       className: ["anchor", anchor.oneOff && "oneoff", anchor.active && "active"].filter(Boolean) as string[],
-      title: anchor.oneOff ? "Open one-off" : "Open side thread",
+      title: anchor.oneOff ? "Open side question" : "Open side thread",
     },
     children: [{ type: "text", value }],
   };

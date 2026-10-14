@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { BuiltContext } from "./context";
 
-export const MODEL = "claude-opus-5-5";
+export const MODEL = "claude-sonnet-5-5";
 
 // Frozen on purpose: the system prompt is the first thing in the cached
 // prefix, so any change to it (timestamps, per-request ids) would invalidate
@@ -17,11 +17,14 @@ export function streamReply(ctx: BuiltContext): AsyncGenerator<string, Usage | n
   return process.env.ANTHROPIC_API_KEY ? streamClaude(ctx) : streamMock(ctx);
 }
 
-const client = new Anthropic();
+// Created on first use, not at import: if the key is added to .env.local while
+// the dev server is running, a client built at import time would have no key.
+let client: Anthropic | undefined;
 
 async function* streamClaude(ctx: BuiltContext): AsyncGenerator<string, Usage | null> {
   const messages = withForkBreakpoint(ctx);
 
+  client ??= new Anthropic();
   const stream = client.beta.messages.stream({
     model: MODEL,
     max_tokens: 64000,

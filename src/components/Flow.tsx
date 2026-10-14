@@ -11,6 +11,21 @@ type Tree = { threads: Thread[]; messages: Message[] };
 type Selection = { text: string; threadId: string; messageId: string; x: number; y: number };
 
 const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+
+/** A request that failed in a way worth telling the user about. */
+class ApiError extends Error {}
+
+/** fetch() that turns network failures and non-2xx responses into readable ApiErrors. */
+async function api(url: string, init?: RequestInit): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch {
+    throw new ApiError("Can't reach the Flow server. Is it running?");
+  }
+  if (!res.ok) throw new ApiError(`Request failed (${res.status}). Try again.`);
+  return res;
+}
 const MOD = isMac ? "⌘" : "Ctrl";
 
 /**
@@ -34,20 +49,44 @@ export default function Flow() {
   const sideInput = useRef<HTMLTextAreaElement>(null);
   const mainScroll = useRef<HTMLDivElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Every action catches its own failures and lands here, so a dead server or
+  // a bad response shows a short notice instead of an unhandled rejection.
+  const report = useCallback((e: unknown) => {
+    console.warn("[flow]", e);
+    setError(e instanceof ApiError ? e.message : "Something went wrong. Try again.");
+  }, []);
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 5000);
+    return () => clearTimeout(t);
+  }, [error]);
 
   // ---------- data ----------
 
-  const loadConversations = useCallback(async () => {
-    const list: Thread[] = await fetch("/api/threads").then((r) => r.json());
-    setConversations(list);
-    return list;
-  }, []);
+  const loadConversations = useCallback(async (): Promise<Thread[]> => {
+    try {
+      const list: Thread[] = await (await api("/api/threads")).json();
+      setConversations(list);
+      return list;
+    } catch (e) {
+      report(e);
+      return [];
+    }
+  }, [report]);
 
-  const loadTree = useCallback(async (id: string) => {
-    const t: Tree = await fetch(`/api/threads/${id}`).then((r) => r.json());
-    setTree(t);
-    return t;
-  }, []);
+  const loadTree = useCallback(
+    async (id: string) => {
+      try {
+        const t: Tree = await (await api(`/api/threads/${id}`)).json();
+        setTree(t);
+      } catch (e) {
+        report(e);
+      }
+    },
+    [report],
+  );
 
   useEffect(() => {
     loadConversations().then((list) => list[0] && setRootId(list[0].id));
@@ -79,7 +118,8 @@ export default function Flow() {
   const focusThread = focus ? byId.get(focus) : undefined;
   const focusMessages = useMemo(() => (focus ? messagesOf(focus) : []), [focus, messagesOf]);
   // Every branch of the center thread (drawn as highlights) vs. the real side
-  // threads (listed in the panel and the map). One-offs are only the former.
+  // threads (listed in the panel and the map). Unsaved "ask on the side"
+  // branches (kind "oneoff") are only the former.
   const branches = useMemo(() => (focus ? childrenOf(focus) : []), [focus, childrenOf]);
   const sideThreads = useMemo(() => branches.filter((t) => t.kind !== "oneoff"), [branches]);
   const activeSide = branches.find((t) => t.id === sideId) ?? null;
@@ -134,8 +174,9 @@ export default function Flow() {
 
   // ---------- actions ----------
 
+  /** Throws on failure; callers catch. */
   const newConversation = useCallback(async () => {
-    const t: Thread = await fetch("/api/threads", { method: "POST", body: "{}" }).then((r) => r.json());
+    const t: Thread = await (await api("/api/threads", { method: "POST", body: "{}" })).json();
     await loadConversations();
     setRootId(t.id);
     mainInput.current?.focus();
@@ -146,30 +187,40 @@ export default function Flow() {
     async (threadId: string | null, content: string) => {
       const text = content.trim();
       if (!text) return;
-      const target = threadId ?? (await newConversation());
+      let target: string;
+      try {
+        target = threadId ?? (await newConversation());
+      } catch (e) {
+        return report(e);
+      }
 
       // Optimistic: show the user's message and an empty streaming reply immediately.
       const temp: Message = { id: `temp-${Date.now()}`, threadId: target, role: "user", content: text, createdAt: Date.now() };
       setTree((t) => ({ ...t, messages: [...t.messages, temp] }));
       setStreaming((s) => ({ ...s, [target]: "" }));
 
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId: target, content: text }),
-      });
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        setStreaming((s) => ({ ...s, [target]: (s[target] ?? "") + chunk }));
+      try {
+        const res = await api("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ threadId: target, content: text }),
+        });
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          setStreaming((s) => ({ ...s, [target]: (s[target] ?? "") + chunk }));
+        }
+      } catch (e) {
+        report(e);
       }
 
-      // Swap the optimistic state for the saved rows (real ids, needed for forking).
-      // An existing thread lives in the current tree; otherwise `target` is the
-      // conversation we just created.
+      // Swap the optimistic state for the saved rows (real ids, needed for
+      // forking). On failure this also drops the optimistic message the
+      // server never saved. An existing thread lives in the current tree;
+      // otherwise `target` is the conversation we just created.
       await loadTree(threadId && rootId ? rootId : target);
       setStreaming((s) => {
         const rest = { ...s };
@@ -178,18 +229,26 @@ export default function Flow() {
       });
       loadConversations();
     },
-    [newConversation, loadTree, loadConversations, rootId],
+    [newConversation, loadTree, loadConversations, rootId, report],
   );
 
   /** Branch from a message in `fromThreadId`. Branching from the side panel drills into it. */
   const fork = useCallback(
-    async (fromThreadId: string, messageId: string, anchorText: string | null, kind: Thread["kind"] = "thread") => {
+    // Branches start as one-offs; they join the map only when the user saves them.
+    async (fromThreadId: string, messageId: string, anchorText: string | null, kind: Thread["kind"] = "oneoff") => {
       if (!rootId) return;
-      const t: Thread = await fetch("/api/threads", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ parentThreadId: fromThreadId, forkMessageId: messageId, anchorText, kind }),
-      }).then((r) => r.json());
+      let t: Thread;
+      try {
+        t = await (
+          await api("/api/threads", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ parentThreadId: fromThreadId, forkMessageId: messageId, anchorText, kind }),
+          })
+        ).json();
+      } catch (e) {
+        return report(e);
+      }
       window.getSelection()?.removeAllRanges();
       setSelection(null);
       await loadTree(rootId);
@@ -201,28 +260,36 @@ export default function Flow() {
         goTo(fromThreadId, t.id);
       }
     },
-    [rootId, focus, loadTree, goTo],
+    [rootId, focus, loadTree, goTo, report],
   );
 
   const saveToMap = useCallback(
     async (id: string) => {
-      await fetch(`/api/threads/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "thread" }),
-      });
+      try {
+        await api(`/api/threads/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "thread" }),
+        });
+      } catch (e) {
+        return report(e);
+      }
       if (rootId) await loadTree(rootId); // it stays open on the side, now as a regular thread
     },
-    [rootId, loadTree],
+    [rootId, loadTree, report],
   );
 
   const deleteThread = useCallback(
     async (id: string) => {
-      await fetch(`/api/threads/${id}`, { method: "DELETE" });
+      try {
+        await api(`/api/threads/${id}`, { method: "DELETE" });
+      } catch (e) {
+        return report(e);
+      }
       if (sideId === id) setSideId(null);
       if (rootId) loadTree(rootId);
     },
-    [sideId, rootId, loadTree],
+    [sideId, rootId, loadTree, report],
   );
 
   // ---------- text selection -> "ask on the side", highlight clicks ----------
@@ -264,11 +331,6 @@ export default function Flow() {
 
       if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        // ⇧⌘K: a one-off about the highlight (needs a highlight, there's no whole-reply version)
-        if (e.shiftKey) {
-          if (selection) fork(selection.threadId, selection.messageId, selection.text, "oneoff");
-          return;
-        }
         if (selection) return void fork(selection.threadId, selection.messageId, selection.text);
         const lastReply = [...focusMessages].reverse().find((m) => m.role === "assistant" && !m.id.startsWith("temp-"));
         if (focus && lastReply) fork(focus, lastReply.id, null);
@@ -330,7 +392,7 @@ export default function Flow() {
       >
         <div className="flex items-center justify-between px-4 py-3">
           <span className="font-semibold tracking-tight">Flow</span>
-          <button onClick={newConversation} className="rounded-md px-2 py-1 text-sm text-muted hover:bg-hover hover:text-fg">
+          <button onClick={() => newConversation().catch(report)} className="rounded-md px-2 py-1 text-sm text-muted hover:bg-hover hover:text-fg">
             + New
           </button>
         </div>
@@ -366,7 +428,6 @@ export default function Flow() {
         )}
         <div className="mt-auto space-y-1 border-t border-line px-4 py-3 text-xs text-muted">
           <Shortcut k={`${MOD}K`} label="ask on the side" />
-          <Shortcut k={`⇧${MOD}K`} label="one-off question" />
           <Shortcut k="Esc" label="close panel / up a level" />
           <Shortcut k="⇧Esc" label="back to main" />
           <Shortcut k="⌥↑ ⌥↓" label="switch side threads" />
@@ -477,7 +538,7 @@ export default function Flow() {
                   {activeIsOneOff ? (
                     <div className="flex shrink-0 items-center gap-1">
                       <span className="rounded-md border border-dashed border-accent/60 px-2 py-1 text-xs text-accent" title="Not in the map. Reopen it from its highlight.">
-                        One-off
+                        Not in map
                       </span>
                       <button
                         onClick={() => saveToMap(activeSide.id)}
@@ -486,7 +547,7 @@ export default function Flow() {
                       >
                         Save to map
                       </button>
-                      <button onClick={() => deleteThread(activeSide.id)} className="rounded-md px-1.5 py-1 text-xs text-muted hover:text-fg" title="Delete one-off">
+                      <button onClick={() => deleteThread(activeSide.id)} className="rounded-md px-1.5 py-1 text-xs text-muted hover:text-fg" title="Delete">
                         ✕
                       </button>
                     </div>
@@ -527,6 +588,19 @@ export default function Flow() {
         </aside>
       )}
 
+      {error && (
+        <div
+          role="alert"
+          className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-line bg-bg px-4 py-2.5 text-sm shadow-lg"
+        >
+          <span className="size-2 shrink-0 rounded-full bg-red-500" />
+          {error}
+          <button onClick={() => setError(null)} className="text-muted hover:text-fg" title="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Floating "ask on the side" button for highlighted text */}
       {selection && (
         <div
@@ -537,15 +611,6 @@ export default function Flow() {
           <button onClick={() => fork(selection.threadId, selection.messageId, selection.text)} className="px-3 py-1.5 hover:bg-white/10">
             Ask on the side <span className="opacity-60">{MOD}K</span>
           </button>
-          {/* One-offs can only hang off center/side threads that may branch */}
-          {byId.get(selection.threadId)?.kind !== "oneoff" && (
-            <button
-              onClick={() => fork(selection.threadId, selection.messageId, selection.text, "oneoff")}
-              className="border-l border-white/20 px-3 py-1.5 hover:bg-white/10"
-            >
-              One-off <span className="opacity-60">⇧{MOD}K</span>
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -600,7 +665,7 @@ function MessageList({
                 <button
                   key={t.id}
                   onClick={() => onOpen(t.id)}
-                  className={`max-w-64 truncate rounded-full border px-2.5 py-0.5 text-xs ${
+                  className={`max-w-64 truncate rounded-full border px-2.5 py-0.5 text-xs ${t.kind === "oneoff" ? "border-dashed" : ""} ${
                     t.id === activeChildId ? "border-accent text-accent" : "border-line text-muted hover:text-fg"
                   }`}
                 >
@@ -608,7 +673,7 @@ function MessageList({
                 </button>
               ))}
             <button onClick={() => onFork(m.id)} className="rounded-full px-2 py-0.5 text-xs text-muted opacity-60 hover:opacity-100">
-              + side thread
+              + ask on the side
             </button>
           </div>
         )}
