@@ -6,43 +6,19 @@ import remarkGfm from "remark-gfm";
 import type { Message, Thread } from "@/lib/db";
 import { rehypeAnchors, type Anchor } from "@/lib/rehype-anchors";
 import { STOPPED_NOTE } from "@/lib/shared";
+import { api, ApiError, devMockHeader } from "@/lib/client";
 import ThreadMap from "./ThreadMap";
+import FileTree from "./FileTree";
+import Settings from "./Settings";
+import NoteEditor, { type NoteEditorHandle } from "./NoteEditor";
+import type { VaultEntry } from "@/lib/vault";
+import type { LinkHost } from "@/lib/wikilinks";
 
 type Tree = { threads: Thread[]; messages: Message[] };
 const NO_MESSAGES: Message[] = [];
 type Selection = { text: string; threadId: string; messageId: string; x: number; y: number };
 
 const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
-
-/**
- * Dev-only free test mode: run `localStorage.setItem("flow.mock", "1")` in the
- * browser console and replies come from the mock instead of the API. Use
- * "think" for a 2s pause before the first chunk. Remove the item to go back.
- */
-function devMockHeader(): Record<string, string> {
-  if (process.env.NODE_ENV === "production") return {};
-  try {
-    const mode = localStorage.getItem("flow.mock"); // "1" or "think"
-    return mode === "1" || mode === "think" ? { "x-flow-mock": mode } : {};
-  } catch {
-    return {};
-  }
-}
-
-/** A request that failed in a way worth telling the user about. */
-class ApiError extends Error {}
-
-/** fetch() that turns network failures and non-2xx responses into readable ApiErrors. */
-async function api(url: string, init?: RequestInit): Promise<Response> {
-  let res: Response;
-  try {
-    res = await fetch(url, init);
-  } catch {
-    throw new ApiError("Can't reach the Flow server. Is it running?");
-  }
-  if (!res.ok) throw new ApiError(`Request failed (${res.status}). Try again.`);
-  return res;
-}
 const MOD = isMac ? "⌘" : "Ctrl";
 
 /**
@@ -72,6 +48,12 @@ export default function Flow() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [home, setHome] = useState(false); // Home page instead of a conversation
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const [files, setFiles] = useState<VaultEntry[] | null>(null); // the vault, loaded on Home
+  const [openNote, setOpenNote] = useState<string | null>(null);
+  const [noteHistory, setNoteHistory] = useState<string[]>([]); // notes left by following [[links]], for "← back"
+  const editor = useRef<NoteEditorHandle>(null);
   const [matches, setMatches] = useState<Set<string> | null>(null); // null = not searching
 
   // Every action catches its own failures and lands here, so a dead server or
@@ -127,7 +109,7 @@ export default function Flow() {
   // Re-runs when the conversation list changes, so new messages become searchable.
   useEffect(() => {
     const q = query.trim();
-    if (!q) return setMatches(null);
+    if (!q || home) return setMatches(null); // on Home the file tree filters by name
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
@@ -141,7 +123,7 @@ export default function Flow() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [query, conversations, report]);
+  }, [query, conversations, home, report]);
   const shownConversations = matches ? conversations.filter((c) => matches.has(c.id)) : conversations;
 
   const byId = useMemo(() => new Map(tree.threads.map((t) => [t.id, t])), [tree.threads]);
@@ -186,11 +168,202 @@ export default function Flow() {
 
   // ---------- navigation ----------
 
+  const loadFiles = useCallback(async () => {
+    try {
+      setFiles(await (await api("/api/files")).json());
+    } catch (e) {
+      report(e);
+    }
+  }, [report]);
+
+  // ---------- [[links]] between notes ----------
+
+  const noteList = useMemo(() => {
+    const out: { path: string; name: string; folder: string }[] = [];
+    const walk = (list: VaultEntry[]) =>
+      list.forEach((e) => {
+        if (e.type === "folder") walk(e.children);
+        else out.push({ path: e.path, name: e.name.replace(/\.md$/i, ""), folder: e.path.includes("/") ? e.path.slice(0, e.path.lastIndexOf("/")) : "" });
+      });
+    walk(files ?? []);
+    return out;
+  }, [files]);
+
+  /** Which note a link points to: an exact "folder/name", else a same-named note, preferring the current folder. */
+  const resolveLink = useCallback(
+    (target: string, from: string | null): string | null => {
+      const t = target.replace(/\.md$/i, "").toLowerCase();
+      if (t.includes("/")) return noteList.find((n) => n.path.toLowerCase() === `${t}.md`)?.path ?? null;
+      const matches = noteList.filter((n) => n.name.toLowerCase() === t);
+      if (!matches.length) return null;
+      const here = from?.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "";
+      return (matches.find((n) => n.folder === here) ?? [...matches].sort((a, b) => a.path.length - b.path.length)[0]).path;
+    },
+    [noteList],
+  );
+
+  /** Follow a link: open the note, creating it next to the current one if it doesn't exist yet. */
+  const openLink = useCallback(
+    async (target: string) => {
+      const from = openNote;
+      let path = resolveLink(target, from);
+      if (!path) {
+        const folder = from?.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "";
+        try {
+          path = ((await (
+            await api("/api/files", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parent: folder, name: target, type: "file" }) })
+          ).json()) as { path: string }).path;
+        } catch (e) {
+          return report(e);
+        }
+        await loadFiles();
+      }
+      if (path === from) return;
+      await editor.current?.flush(); // save the note we're leaving
+      if (from) setNoteHistory((h) => [...h, from]);
+      setOpenNote(path);
+    },
+    [openNote, resolveLink, loadFiles, report],
+  );
+
+  const linkHost = useMemo<LinkHost>(
+    () => ({
+      exists: (target) => resolveLink(target, openNote) !== null,
+      open: (target) => void openLink(target),
+      notes: () => noteList.map(({ name, folder }) => ({ name, folder })),
+    }),
+    [resolveLink, openNote, openLink, noteList],
+  );
+
+  const goBack = useCallback(async () => {
+    const prev = [...noteHistory].reverse().find((p) => noteList.some((n) => n.path === p)); // skip deleted notes
+    if (!prev) return setNoteHistory([]);
+    await editor.current?.flush();
+    setNoteHistory((h) => h.slice(0, h.lastIndexOf(prev)));
+    setOpenNote(prev);
+  }, [noteHistory, noteList]);
+
+  /** Opening a note from the sidebar starts a fresh trail. */
+  const openFromSidebar = useCallback((path: string) => {
+    setNoteHistory([]);
+    setOpenNote(path);
+  }, []);
+
+  const lastConversation = useRef<string | null>(null); // where "Chats" returns to from Home
+
   const goHome = useCallback(() => {
+    lastConversation.current = rootId;
     setHome(true);
     setRootId(null); // clears the tree, map and side panel
     setQuery("");
-  }, []);
+    void loadFiles();
+  }, [rootId, loadFiles]);
+
+  /** Leave Home: back to the last conversation, else the most recent one. */
+  const goToChats = useCallback(() => {
+    const id = conversations.some((c) => c.id === lastConversation.current) ? lastConversation.current : (conversations[0]?.id ?? null);
+    setHome(false);
+    setQuery("");
+    setRootId(id);
+  }, [conversations]);
+
+  /** Turn the focused chat (and everything branched off it, nothing above) into a note, then open it on Home. */
+  const [makingNote, setMakingNote] = useState<string | null>(null); // thread id being summarized
+  const makeNote = useCallback(
+    async (threadId: string) => {
+      setMakingNote(threadId);
+      try {
+        const res = await api(`/api/threads/${threadId}/note`, { method: "POST", headers: devMockHeader() });
+        const { path } = (await res.json()) as { path: string };
+        await loadFiles(); // before switching, so Home doesn't flash an empty file list
+        lastConversation.current = rootId; // "Chats" comes back here
+        setHome(true);
+        setRootId(null);
+        setQuery("");
+        setNoteHistory([]);
+        setOpenNote(path);
+      } catch (e) {
+        report(e);
+      } finally {
+        setMakingNote(null);
+      }
+    },
+    [rootId, loadFiles, report],
+  );
+
+  // ---------- vault (Home) ----------
+
+  /** Create "Untitled" / "New folder", adding a number if the name is taken. */
+  const createEntry = useCallback(
+    async (parent: string, type: "file" | "folder") => {
+      const base = type === "file" ? "Untitled" : "New folder";
+      for (let n = 0; n < 100; n++) {
+        const name = n ? `${base} ${n}` : base;
+        const res = await fetch("/api/files", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ parent, name, type }),
+        }).catch(() => null);
+        if (res?.status === 409) continue; // taken: try the next number
+        if (!res?.ok) {
+          report(new ApiError(res ? ((await res.json().catch(() => ({}))).error ?? "Couldn't create it") : "Can't reach the Flow server. Is it running?"));
+          return null;
+        }
+        const { path } = (await res.json()) as { path: string };
+        await loadFiles();
+        if (type === "file") setOpenNote(path);
+        return path;
+      }
+      return null;
+    },
+    [loadFiles, report],
+  );
+
+  /** Rename or move; keeps the open note open if it (or its folder) moved. */
+  const moveEntryTo = useCallback(
+    async (from: string, to: string) => {
+      await editor.current?.flush(); // save pending edits under the old name first
+      try {
+        const { path } = (await (
+          await api("/api/files", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from, to }) })
+        ).json()) as { path: string };
+        setOpenNote((open) => (open === from ? path : open?.startsWith(from + "/") ? path + open.slice(from.length) : open));
+      } catch (e) {
+        report(e);
+      }
+      await loadFiles();
+    },
+    [loadFiles, report],
+  );
+
+  const renameEntry = useCallback(
+    (path: string, name: string) => {
+      const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
+      const isNote = path.toLowerCase().endsWith(".md");
+      return moveEntryTo(path, parent + (isNote && !name.toLowerCase().endsWith(".md") ? `${name}.md` : name));
+    },
+    [moveEntryTo],
+  );
+
+  const moveEntry = useCallback(
+    (path: string, toFolder: string) => moveEntryTo(path, (toFolder ? toFolder + "/" : "") + path.split("/").pop()),
+    [moveEntryTo],
+  );
+
+  const deleteEntry = useCallback(
+    async (path: string) => {
+      // Deleting the open note (or its folder): don't try to save it afterwards.
+      if (openNote && (openNote === path || openNote.startsWith(path + "/"))) editor.current?.discard();
+      try {
+        await api(`/api/files?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+        setOpenNote((open) => (open === path || open?.startsWith(path + "/") ? null : open));
+      } catch (e) {
+        report(e);
+      }
+      await loadFiles();
+    },
+    [openNote, loadFiles, report],
+  );
 
   /** Put `threadId` in the center, optionally with one of its children open on the side. */
   const goTo = useCallback((threadId: string, side: string | null = null, moveKeyboardFocus = true) => {
@@ -483,6 +656,17 @@ export default function Flow() {
         if (focus && lastReply) fork(focus, lastReply.id, null);
         return;
       }
+      // ⌘⌥← (as in Obsidian): ⌘[ is taken by the browser's Back and the editor's outdent.
+      if (mod && e.altKey && e.key === "ArrowLeft" && home && noteHistory.length) {
+        e.preventDefault();
+        void goBack();
+        return;
+      }
+      if (mod && e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
       if (mod && e.key === "\\") {
         e.preventDefault();
         setSideOpen((o) => !o);
@@ -509,7 +693,7 @@ export default function Flow() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selection, fork, focus, focusMessages, rootId, goTo, goUp, showSide, sideThreads, sideId, openThread]);
+  }, [selection, fork, focus, focusMessages, rootId, goTo, goUp, showSide, sideThreads, sideId, openThread, home, noteHistory, goBack]);
 
   // Keep the center pinned to the bottom while it streams (only if already near the bottom).
   useEffect(() => {
@@ -559,12 +743,12 @@ export default function Flow() {
                   e.stopPropagation();
                   if (query) setQuery("");
                   else e.currentTarget.blur();
-                } else if (e.key === "Enter" && shownConversations[0]) {
+                } else if (e.key === "Enter" && !home && shownConversations[0]) {
                   openConversation(shownConversations[0].id);
                 }
               }}
-              placeholder="Search"
-              aria-label="Search chats"
+              placeholder={home ? "Search files" : "Search"}
+              aria-label={home ? "Search files" : "Search chats"}
               className="w-full rounded-md border border-line bg-bg py-1 pr-2 pl-8 text-sm outline-none placeholder:text-muted focus:border-stone-400"
             />
           </div>
@@ -579,14 +763,41 @@ export default function Flow() {
             </svg>
             Home
           </button>
-          <button
-            onClick={() => newConversation().catch(report)}
-            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg"
-          >
-            <span className="w-3.5 text-center text-base leading-none">+</span>
-            New chat
-          </button>
+          {home ? (
+            <button
+              onClick={goToChats}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg"
+            >
+              <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+                <path d="M2.5 4a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 13.5 4v5.5A1.5 1.5 0 0 1 12 11H7l-3 2.5V11H4a1.5 1.5 0 0 1-1.5-1.5V4Z" />
+              </svg>
+              Chats
+            </button>
+          ) : (
+            <button
+              onClick={() => newConversation().catch(report)}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg"
+            >
+              <span className="w-3.5 text-center text-base leading-none">+</span>
+              New chat
+            </button>
+          )}
         </div>
+        {home ? (
+          files && (
+            <FileTree
+              entries={files}
+              activePath={openNote}
+              filter={query}
+              onOpen={openFromSidebar}
+              onCreate={createEntry}
+              onRename={renameEntry}
+              onMove={moveEntry}
+              onDelete={deleteEntry}
+            />
+          )
+        ) : (
+          <>
         <nav className="max-h-[35%] shrink-0 overflow-y-auto px-2 pb-3">
           {matches && shownConversations.length === 0 && <p className="px-3 py-2 text-sm text-muted">No chats match “{query.trim()}”</p>}
           {shownConversations.map((c) => (
@@ -618,26 +829,65 @@ export default function Flow() {
             </div>
           </div>
         )}
-        <div className="mt-auto space-y-1 border-t border-line px-4 py-3 text-xs text-muted">
-          <Shortcut k={`${MOD}K`} label="ask on the side" />
-          <Shortcut k="Esc" label="close panel / up a level" />
-          <Shortcut k="⇧Esc" label="back to main" />
-          <Shortcut k="⌥↑ ⌥↓" label="switch side threads" />
-          <Shortcut k={`${MOD}\\`} label="toggle side panel" />
+          </>
+        )}
+        <div className="mt-auto border-t border-line px-3 py-2">
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg"
+            title={`Settings (${MOD},)`}
+          >
+            <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="8" cy="8" r="2" />
+              <path d="M8 1.5v1.75M8 12.75v1.75M1.5 8h1.75M12.75 8h1.75M3.4 3.4l1.24 1.24M11.36 11.36l1.24 1.24M3.4 12.6l1.24-1.24M11.36 4.64l1.24-1.24" />
+            </svg>
+            Settings
+          </button>
         </div>
       </aside>
 
       {home ? (
-        // Home page: empty for now
-        <main className="flex min-w-0 flex-1 flex-col px-10 py-8">
-          <h1 className="text-sm font-medium text-muted">Home</h1>
+        <main className="min-w-0 flex-1">
+          {openNote ? (
+            <NoteEditor
+              ref={editor}
+              path={openNote}
+              onError={report}
+              links={linkHost}
+              linksVersion={files}
+              back={
+                noteHistory.length
+                  ? { label: noteHistory.at(-1)!.split("/").pop()!.replace(/\.md$/i, ""), go: () => void goBack() }
+                  : undefined
+              }
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-muted">Open a note from the sidebar, or create one.</div>
+          )}
         </main>
       ) : (
         <>
       {/* Center: the focused thread */}
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="relative flex min-w-0 flex-1 flex-col">
+        {focus && (
+          <button
+            onClick={() => makeNote(focus)}
+            disabled={!!makingNote}
+            className="absolute top-2.5 right-4 z-10 rounded-md border border-line bg-bg px-2.5 py-1 text-xs text-muted hover:text-fg disabled:cursor-wait disabled:opacity-70"
+            title={nested ? "Summarize this branch and its branches into a note" : "Summarize this chat and its branches into a note"}
+          >
+            {makingNote === focus ? (
+              <>
+                <span className="mr-1.5 inline-block size-1.5 animate-pulse rounded-full bg-accent align-middle" />
+                Making note…
+              </>
+            ) : (
+              "Make note"
+            )}
+          </button>
+        )}
         {nested && focusThread && (
-          <header className="border-b border-line bg-accent-soft/60 px-6 py-3">
+          <header className="border-b border-line bg-accent-soft/60 py-3 pr-32 pl-6">
             <nav className="flex flex-wrap items-center gap-1 text-sm">
               {lineage.map((t, i) => (
                 <span key={t.id} className="flex min-w-0 items-center gap-1">
@@ -791,6 +1041,8 @@ export default function Flow() {
         </>
       )}
 
+      {settingsOpen && <Settings onClose={closeSettings} />}
+
       {error && (
         <div
           role="alert"
@@ -883,15 +1135,6 @@ function MessageList({
       </div>
     );
   });
-}
-
-function Shortcut({ k, label }: { k: string; label: string }) {
-  return (
-    <div className="flex justify-between">
-      <span>{label}</span>
-      <kbd className="font-sans text-fg/70">{k}</kbd>
-    </div>
-  );
 }
 
 type BubbleProps = {

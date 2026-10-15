@@ -102,3 +102,43 @@ async function* streamMock({ messages, inheritedUntil }: BuiltContext, { signal,
   }
   return null;
 }
+
+export type CompleteOptions = {
+  system: string;
+  prompt: string;
+  maxTokens: number;
+  /** Fixed placeholder text instead of an API call (dev testing, or no key). */
+  mock?: boolean;
+  signal?: AbortSignal;
+};
+
+/** One whole reply, not streamed: for background jobs like summarizing a chat into a note. */
+export async function complete({ system, prompt, maxTokens, mock, signal }: CompleteOptions): Promise<string> {
+  if (!process.env.ANTHROPIC_API_KEY || mock) return `_(Mock summary: set \`ANTHROPIC_API_KEY\` for a real one.)_\n\n${mockSummary(prompt)}`;
+  client ??= new Anthropic();
+  const msg = await client.beta.messages.create(
+    {
+      model: MODEL,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: prompt }],
+      output_config: { effort: "low" }, // summarizing doesn't need deep thinking; low is faster and cheaper
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+    },
+    { signal },
+  );
+  const text = msg.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("").trim();
+  if (msg.stop_reason === "refusal" || !text) throw new Error("The model declined to summarize this chat");
+  return text;
+}
+
+/** First line of each message in the transcript, as bullets; branch markers go on the first line mentioning their excerpt. */
+function mockSummary(prompt: string): string {
+  const lines = [...prompt.matchAll(/^(User|Assistant): (.+)$/gm)].map((m) => `- **${m[1]}:** ${m[2].slice(0, 100)}`);
+  for (const [, marker, excerpt] of prompt.matchAll(/^(\{\{branch-\d+\}\}): highlighted "(.*)"$/gm)) {
+    const i = lines.findIndex((l) => l.toLowerCase().includes(excerpt.toLowerCase()));
+    if (i >= 0) lines[i] += ` ${marker}`;
+  }
+  return lines.join("\n") || "- (empty chat)";
+}
