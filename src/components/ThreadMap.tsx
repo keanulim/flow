@@ -158,7 +158,7 @@ export default function ThreadMap({ threads, rootId, focusId, sideId, counts, st
             <div
               key={`h-${id}`}
               style={{ top: y - ROW / 2, height: ROW }}
-              className={`absolute inset-x-0 rounded-md ${cursor ? "bg-hover ring-1 ring-accent/40" : "bg-hover/70"}`}
+              className={`absolute inset-x-0 rounded-md ${cursor ? "bg-hover ring-1 ring-stone-300" : "bg-hover/70"}`}
             />
           );
         })}
@@ -170,7 +170,7 @@ export default function ThreadMap({ threads, rootId, focusId, sideId, counts, st
               key={`e-${id}`}
               d={d}
               fill="none"
-              stroke={lit ? "var(--accent)" : "var(--line)"}
+              stroke={lit ? "var(--map-path)" : "var(--line)"}
               strokeWidth={lit ? 1.75 : 1.25}
             />
           ))}
@@ -180,18 +180,17 @@ export default function ThreadMap({ threads, rootId, focusId, sideId, counts, st
             const isSide = id === sideId;
             return (
               <g key={`n-${id}`}>
-                {isFocus && <circle cx={x} cy={y} r={radius(id) + 5} fill="var(--accent)" opacity={0.15} />}
+                {isFocus && <circle cx={x} cy={y} r={radius(id) + 5} fill="var(--map-path)" opacity={0.25} />}
                 <circle
                   cx={x}
                   cy={y}
                   r={radius(id)}
-                  fill={isFocus || isSide || onPath.has(id) ? "var(--accent)" : "var(--muted)"}
-                  opacity={isFocus || onPath.has(id) || isSide ? 1 : 0.55}
-                  stroke={isSide ? "var(--accent)" : "none"}
+                  fill={isFocus ? "var(--map-here)" : isSide || onPath.has(id) ? "var(--map-path)" : "var(--map-node)"}
+                  stroke={isSide ? "var(--map-path)" : "none"}
                   strokeWidth={isSide ? 2 : 0}
                   className={streaming.has(id) ? "animate-pulse" : undefined}
                 />
-                {isSide && <circle cx={x} cy={y} r={radius(id) + 3} fill="none" stroke="var(--accent)" strokeWidth={1.25} />}
+                {isSide && <circle cx={x} cy={y} r={radius(id) + 3} fill="none" stroke="var(--map-path)" strokeWidth={1.25} />}
               </g>
             );
           })}

@@ -1,16 +1,33 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Message, Thread } from "@/lib/db";
 import { rehypeAnchors, type Anchor } from "@/lib/rehype-anchors";
+import { STOPPED_NOTE } from "@/lib/shared";
 import ThreadMap from "./ThreadMap";
 
 type Tree = { threads: Thread[]; messages: Message[] };
+const NO_MESSAGES: Message[] = [];
 type Selection = { text: string; threadId: string; messageId: string; x: number; y: number };
 
 const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+
+/**
+ * Dev-only free test mode: run `localStorage.setItem("flow.mock", "1")` in the
+ * browser console and replies come from the mock instead of the API. Use
+ * "think" for a 2s pause before the first chunk. Remove the item to go back.
+ */
+function devMockHeader(): Record<string, string> {
+  if (process.env.NODE_ENV === "production") return {};
+  try {
+    const mode = localStorage.getItem("flow.mock"); // "1" or "think"
+    return mode === "1" || mode === "think" ? { "x-flow-mock": mode } : {};
+  } catch {
+    return {};
+  }
+}
 
 /** A request that failed in a way worth telling the user about. */
 class ApiError extends Error {}
@@ -49,7 +66,13 @@ export default function Flow() {
   const sideInput = useRef<HTMLTextAreaElement>(null);
   const mainScroll = useRef<HTMLDivElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
+  const aborters = useRef(new Map<string, AbortController>()); // per thread, for Stop
+  const pending = useRef(new Map<string, string>()); // streamed text not yet on screen
+  const flushScheduled = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [home, setHome] = useState(false); // Home page instead of a conversation
+  const [matches, setMatches] = useState<Set<string> | null>(null); // null = not searching
 
   // Every action catches its own failures and lands here, so a dead server or
   // a bad response shows a short notice instead of an unhandled rejection.
@@ -99,15 +122,41 @@ export default function Flow() {
     loadTree(rootId);
   }, [rootId, loadTree]);
 
+  // Search titles and message text (side threads included) as you type. Debounced,
+  // and a newer keystroke cancels an older request so results can't arrive out of order.
+  // Re-runs when the conversation list changes, so new messages become searchable.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) return setMatches(null);
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const ids: string[] = await (await api(`/api/search?q=${encodeURIComponent(q)}`)).json();
+        if (!cancelled) setMatches(new Set(ids));
+      } catch (e) {
+        if (!cancelled) report(e);
+      }
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query, conversations, report]);
+  const shownConversations = matches ? conversations.filter((c) => matches.has(c.id)) : conversations;
+
   const byId = useMemo(() => new Map(tree.threads.map((t) => [t.id, t])), [tree.threads]);
   const childrenOf = useCallback(
     (id: string) => tree.threads.filter((t) => t.parentThreadId === id).sort((a, b) => a.createdAt - b.createdAt),
     [tree.threads],
   );
-  const messagesOf = useCallback(
-    (threadId: string) => tree.messages.filter((m) => m.threadId === threadId),
-    [tree.messages],
-  );
+  // Group once per change instead of filtering the whole list for every thread
+  // on every render. Each thread's array keeps its identity until it changes.
+  const messagesByThread = useMemo(() => {
+    const map = new Map<string, Message[]>();
+    for (const m of tree.messages) map.set(m.threadId, [...(map.get(m.threadId) ?? []), m]);
+    return map;
+  }, [tree.messages]);
+  const messagesOf = useCallback((threadId: string) => messagesByThread.get(threadId) ?? NO_MESSAGES, [messagesByThread]);
   const counts = useMemo(() => {
     const c = new Map<string, number>();
     for (const m of tree.messages) c.set(m.threadId, (c.get(m.threadId) ?? 0) + 1);
@@ -137,6 +186,12 @@ export default function Flow() {
 
   // ---------- navigation ----------
 
+  const goHome = useCallback(() => {
+    setHome(true);
+    setRootId(null); // clears the tree, map and side panel
+    setQuery("");
+  }, []);
+
   /** Put `threadId` in the center, optionally with one of its children open on the side. */
   const goTo = useCallback((threadId: string, side: string | null = null, moveKeyboardFocus = true) => {
     setFocusId(threadId);
@@ -145,6 +200,16 @@ export default function Flow() {
     setSelection(null);
     if (moveKeyboardFocus) requestAnimationFrame(() => (side ? sideInput : mainInput).current?.focus());
   }, []);
+
+  /** Show a conversation (leaving Home). Re-selecting the open one returns to its main thread. */
+  const openConversation = useCallback(
+    (id: string) => {
+      setHome(false);
+      if (id === rootId) goTo(id);
+      else setRootId(id);
+    },
+    [rootId, goTo],
+  );
 
   /** Open a child thread: on the side if it hangs off the center thread, else drill in. */
   const openThread = useCallback(
@@ -178,10 +243,44 @@ export default function Flow() {
   const newConversation = useCallback(async () => {
     const t: Thread = await (await api("/api/threads", { method: "POST", body: "{}" })).json();
     await loadConversations();
+    setHome(false);
     setRootId(t.id);
     mainInput.current?.focus();
     return t.id;
   }, [loadConversations]);
+
+  /**
+   * Streamed chunks arrive far faster than the screen refreshes. Buffer them
+   * and apply them in one state update per animation frame, so a long reply
+   * causes at most ~60 renders a second instead of one per token.
+   *
+   * The 50ms timer is a fallback: some windows report themselves visible but
+   * don't paint, and requestAnimationFrame never fires there, which would
+   * freeze the streaming text until the reply finished.
+   */
+  function queueStreamText(threadId: string, chunk: string) {
+    pending.current.set(threadId, (pending.current.get(threadId) ?? "") + chunk);
+    if (flushScheduled.current) return;
+    flushScheduled.current = true;
+    let done = false;
+    const flush = () => {
+      if (done) return;
+      done = true;
+      flushScheduled.current = false;
+      const batch = new Map(pending.current);
+      pending.current.clear();
+      setStreaming((s) => {
+        const next = { ...s };
+        for (const [id, text] of batch) if (id in next) next[id] += text;
+        return next;
+      });
+    };
+    requestAnimationFrame(flush);
+    setTimeout(flush, 50);
+  }
+
+  /** Stop generating in a thread. The server sees the disconnect and cancels the model call. */
+  const stop = useCallback((threadId: string) => aborters.current.get(threadId)?.abort(), []);
 
   const send = useCallback(
     async (threadId: string | null, content: string) => {
@@ -195,15 +294,25 @@ export default function Flow() {
       }
 
       // Optimistic: show the user's message and an empty streaming reply immediately.
-      const temp: Message = { id: `temp-${Date.now()}`, threadId: target, role: "user", content: text, createdAt: Date.now() };
+      const tempId = `temp-${Date.now()}`;
+      const temp: Message = { id: tempId, threadId: target, role: "user", content: text, createdAt: Date.now() };
       setTree((t) => ({ ...t, messages: [...t.messages, temp] }));
       setStreaming((s) => ({ ...s, [target]: "" }));
 
+      const aborter = new AbortController();
+      aborters.current.set(target, aborter);
+      // We choose the ids, so we know them even if the reply is stopped before
+      // the server sends anything back (headers wait for the first chunk).
+      const ids = { user: crypto.randomUUID(), assistant: crypto.randomUUID() };
+      let received = "";
+      let stopped = false;
+      let failed = false;
       try {
         const res = await api("/api/chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ threadId: target, content: text }),
+          headers: { "Content-Type": "application/json", ...devMockHeader() },
+          body: JSON.stringify({ threadId: target, content: text, userMessageId: ids.user, assistantMessageId: ids.assistant }),
+          signal: aborter.signal,
         });
         const reader = res.body!.getReader();
         const decoder = new TextDecoder();
@@ -211,25 +320,43 @@ export default function Flow() {
           const { done, value } = await reader.read();
           if (done) break;
           const chunk = decoder.decode(value, { stream: true });
-          setStreaming((s) => ({ ...s, [target]: (s[target] ?? "") + chunk }));
+          received += chunk;
+          queueStreamText(target, chunk);
         }
       } catch (e) {
-        report(e);
+        if (aborter.signal.aborted) stopped = true; // the user pressed Stop: not an error
+        else {
+          failed = true; // the server most likely never saved this turn
+          report(e);
+        }
+      } finally {
+        aborters.current.delete(target);
       }
 
-      // Swap the optimistic state for the saved rows (real ids, needed for
-      // forking). On failure this also drops the optimistic message the
-      // server never saved. An existing thread lives in the current tree;
-      // otherwise `target` is the conversation we just created.
-      await loadTree(threadId && rootId ? rootId : target);
+      // Update the local copy with exactly what the server saved, instead of
+      // re-downloading the whole conversation. Upsert by id, so it's harmless
+      // if a conversation load already brought these rows in.
+      setTree((t) => {
+        const messages = t.messages.filter((m) => m.id !== tempId);
+        if (!failed) {
+          const now = Date.now();
+          const add = [
+            { id: ids.user, threadId: target, role: "user" as const, content: text, createdAt: now },
+            { id: ids.assistant, threadId: target, role: "assistant" as const, content: (received || "") + (stopped ? STOPPED_NOTE : "") || "_(empty reply)_", createdAt: now + 1 },
+          ].filter((m) => !messages.some((x) => x.id === m.id));
+          messages.push(...add);
+        }
+        return { ...t, messages };
+      });
+      pending.current.delete(target);
       setStreaming((s) => {
         const rest = { ...s };
         delete rest[target];
         return rest;
       });
-      loadConversations();
+      loadConversations(); // cheap: titles only, picks up a new chat's title
     },
-    [newConversation, loadTree, loadConversations, rootId, report],
+    [newConversation, loadConversations, report],
   );
 
   /** Branch from a message in `fromThreadId`. Branching from the side panel drills into it. */
@@ -251,7 +378,7 @@ export default function Flow() {
       }
       window.getSelection()?.removeAllRanges();
       setSelection(null);
-      await loadTree(rootId);
+      setTree((tr) => ({ ...tr, threads: [...tr.threads, t] }));
       if (fromThreadId === focus) {
         setSideId(t.id);
         setSideOpen(true);
@@ -260,23 +387,27 @@ export default function Flow() {
         goTo(fromThreadId, t.id);
       }
     },
-    [rootId, focus, loadTree, goTo, report],
+    [rootId, focus, goTo, report],
   );
 
   const saveToMap = useCallback(
     async (id: string) => {
+      let saved: Thread;
       try {
-        await api(`/api/threads/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind: "thread" }),
-        });
+        saved = await (
+          await api(`/api/threads/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: "thread" }),
+          })
+        ).json();
       } catch (e) {
         return report(e);
       }
-      if (rootId) await loadTree(rootId); // it stays open on the side, now as a regular thread
+      // It stays open on the side, now as a regular thread.
+      setTree((t) => ({ ...t, threads: t.threads.map((x) => (x.id === id ? saved : x)) }));
     },
-    [rootId, loadTree, report],
+    [report],
   );
 
   const deleteThread = useCallback(
@@ -287,9 +418,25 @@ export default function Flow() {
         return report(e);
       }
       if (sideId === id) setSideId(null);
-      if (rootId) loadTree(rootId);
+      // Mirror the database's cascade: the thread, its descendants, and their messages.
+      setTree((t) => {
+        const gone = new Set([id]);
+        for (let grew = true; grew; ) {
+          grew = false;
+          for (const x of t.threads) {
+            if (x.parentThreadId && gone.has(x.parentThreadId) && !gone.has(x.id)) {
+              gone.add(x.id);
+              grew = true;
+            }
+          }
+        }
+        return {
+          threads: t.threads.filter((x) => !gone.has(x.id)),
+          messages: t.messages.filter((m) => !gone.has(m.threadId)),
+        };
+      });
     },
-    [sideId, rootId, loadTree, report],
+    [sideId, report],
   );
 
   // ---------- text selection -> "ask on the side", highlight clicks ----------
@@ -390,17 +537,62 @@ export default function Flow() {
         }}
         className="flex w-64 shrink-0 flex-col border-r border-line bg-panel"
       >
-        <div className="flex items-center justify-between px-4 py-3">
-          <span className="font-semibold tracking-tight">Flow</span>
-          <button onClick={() => newConversation().catch(report)} className="rounded-md px-2 py-1 text-sm text-muted hover:bg-hover hover:text-fg">
-            + New
+        <div className="px-3 pt-3 pb-1">
+          <div className="relative">
+            <svg
+              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+            >
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="M10.5 10.5 14 14" />
+            </svg>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  // Clear first, then leave the box. Don't let the app-wide Esc react.
+                  e.stopPropagation();
+                  if (query) setQuery("");
+                  else e.currentTarget.blur();
+                } else if (e.key === "Enter" && shownConversations[0]) {
+                  openConversation(shownConversations[0].id);
+                }
+              }}
+              placeholder="Search"
+              aria-label="Search chats"
+              className="w-full rounded-md border border-line bg-bg py-1 pr-2 pl-8 text-sm outline-none placeholder:text-muted focus:border-stone-400"
+            />
+          </div>
+          <button
+            onClick={goHome}
+            className={`mt-2 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm ${
+              home ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"
+            }`}
+          >
+            <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+              <path d="M2.5 7 8 2.5 13.5 7v6a.5.5 0 0 1-.5.5H9.5v-4h-3v4H3a.5.5 0 0 1-.5-.5V7Z" />
+            </svg>
+            Home
+          </button>
+          <button
+            onClick={() => newConversation().catch(report)}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg"
+          >
+            <span className="w-3.5 text-center text-base leading-none">+</span>
+            New chat
           </button>
         </div>
         <nav className="max-h-[35%] shrink-0 overflow-y-auto px-2 pb-3">
-          {conversations.map((c) => (
+          {matches && shownConversations.length === 0 && <p className="px-3 py-2 text-sm text-muted">No chats match “{query.trim()}”</p>}
+          {shownConversations.map((c) => (
             <button
               key={c.id}
-              onClick={() => (c.id === rootId ? goTo(c.id) : setRootId(c.id))}
+              onClick={() => openConversation(c.id)}
               className={`block w-full truncate rounded-md px-3 py-2 text-left text-sm ${
                 c.id === rootId ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"
               }`}
@@ -435,6 +627,13 @@ export default function Flow() {
         </div>
       </aside>
 
+      {home ? (
+        // Home page: empty for now
+        <main className="flex min-w-0 flex-1 flex-col px-10 py-8">
+          <h1 className="text-sm font-medium text-muted">Home</h1>
+        </main>
+      ) : (
+        <>
       {/* Center: the focused thread */}
       <main className="flex min-w-0 flex-1 flex-col">
         {nested && focusThread && (
@@ -483,6 +682,7 @@ export default function Flow() {
         </div>
         <Composer
           ref={mainInput}
+          onStop={() => focus && stop(focus)}
           busy={!!focus && streaming[focus] !== undefined}
           placeholder={nested ? "Continue this side thread…" : "Message the main thread…"}
           onSend={(text) => send(focus, text)}
@@ -576,6 +776,7 @@ export default function Flow() {
               </div>
               <Composer
                 ref={sideInput}
+                onStop={() => stop(activeSide.id)}
                 busy={streaming[activeSide.id] !== undefined}
                 placeholder={activeIsOneOff ? "Follow up…  (Esc to return)" : "Ask on the side…  (Esc to return)"}
                 onSend={(text) => send(activeSide.id, text)}
@@ -586,6 +787,8 @@ export default function Flow() {
             <p className="p-6 text-sm text-muted">Pick a side thread, or highlight text in a reply and press {MOD}K.</p>
           )}
         </aside>
+      )}
+        </>
       )}
 
       {error && (
@@ -691,19 +894,38 @@ function Shortcut({ k, label }: { k: string; label: string }) {
   );
 }
 
-function Bubble({
-  message,
-  threadId,
-  forkable,
-  compact,
-  anchors,
-}: {
+type BubbleProps = {
   message: Pick<Message, "role" | "content"> & { id?: string };
   threadId?: string;
   forkable?: boolean;
   compact?: boolean;
   anchors?: Anchor[];
-}) {
+};
+
+/**
+ * Memoized: rendering Markdown and running the highlight plugin is the most
+ * expensive thing on screen, and most re-renders (every streamed chunk,
+ * every keystroke) don't change a finished message. `anchors` is a fresh
+ * array on every parent render, so compare it by value, not identity.
+ */
+const Bubble = memo(BubbleView, (a, b) =>
+  a.message.content === b.message.content &&
+  a.message.role === b.message.role &&
+  a.message.id === b.message.id &&
+  a.threadId === b.threadId &&
+  a.forkable === b.forkable &&
+  a.compact === b.compact &&
+  sameAnchors(a.anchors, b.anchors),
+);
+
+function sameAnchors(a: Anchor[] = [], b: Anchor[] = []) {
+  return (
+    a.length === b.length &&
+    a.every((x, i) => x.threadId === b[i].threadId && x.text === b[i].text && x.active === b[i].active && x.oneOff === b[i].oneOff)
+  );
+}
+
+function BubbleView({ message, threadId, forkable, compact, anchors }: BubbleProps) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -729,6 +951,7 @@ function Composer({
   busy,
   placeholder,
   onSend,
+  onStop,
   compact,
   autoFocus,
 }: {
@@ -736,12 +959,25 @@ function Composer({
   busy: boolean;
   placeholder: string;
   onSend: (text: string) => void;
+  onStop: () => void;
   compact?: boolean;
   autoFocus?: boolean;
 }) {
   const [value, setValue] = useState("");
   return (
-    <div className={compact ? "border-t border-line p-3" : "mx-auto w-full max-w-3xl px-6 pb-6"}>
+    <div className={`relative ${compact ? "border-t border-line p-3" : "mx-auto w-full max-w-3xl px-6 pb-6"}`}>
+      {busy && (
+        <button
+          onClick={onStop}
+          className={`absolute z-10 flex items-center gap-1.5 rounded-md border border-line bg-bg px-2.5 py-1 text-xs text-muted shadow-sm hover:text-fg ${
+            compact ? "right-5 bottom-5" : "right-8 bottom-8"
+          }`}
+          title="Stop generating"
+        >
+          <span className="size-2 rounded-[2px] bg-current" />
+          Stop
+        </button>
+      )}
       <textarea
         ref={ref}
         value={value}
@@ -757,7 +993,7 @@ function Composer({
             setValue("");
           }
         }}
-        className="w-full resize-none rounded-xl border border-line bg-bg px-4 py-3 outline-none placeholder:text-muted focus:border-accent"
+        className="w-full resize-none rounded-xl border border-line bg-bg px-4 py-3 outline-none placeholder:text-muted focus:border-stone-400"
       />
     </div>
   );

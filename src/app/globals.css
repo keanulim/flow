@@ -11,6 +11,10 @@
   --user: #f0efed;
   --accent: #4f46e5;
   --accent-soft: #eef2ff;
+  /* Map colors: swap these to give the map its own color later */
+  --map-path: #a8a29e; /* lines and dots on your current path */
+  --map-here: #78716c; /* the dot you're on */
+  --map-node: #d6d3d1; /* dots off the path */
 }
 
 @theme inline {

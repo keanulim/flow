@@ -92,6 +92,32 @@ export function listConversations(): Thread[] {
     .all() as Thread[];
 }
 
+/**
+ * Conversations (main-thread ids) where any thread title or message contains
+ * `query`, case-insensitively. Hits in side threads count for their
+ * conversation: the recursive CTE walks each hit up to its root.
+ */
+export function searchConversations(query: string): string[] {
+  const like = `%${query.replace(/[\\%_]/g, (c) => "\\" + c)}%`; // match literally, % and _ included
+  const rows = db
+    .prepare(
+      `WITH RECURSIVE
+         hits(id) AS (
+           SELECT id FROM threads WHERE title LIKE @like ESCAPE '\\'
+           UNION
+           SELECT thread_id FROM messages WHERE content LIKE @like ESCAPE '\\'
+         ),
+         up(id, parent) AS (
+           SELECT t.id, t.parent_thread_id FROM threads t JOIN hits h ON t.id = h.id
+           UNION
+           SELECT t.id, t.parent_thread_id FROM threads t JOIN up ON t.id = up.parent
+         )
+       SELECT DISTINCT id FROM up WHERE parent IS NULL`,
+    )
+    .all({ like }) as { id: string }[];
+  return rows.map((r) => r.id);
+}
+
 /** A main thread plus every thread descended from it, with all their messages. */
 export function getConversation(rootId: string): { threads: Thread[]; messages: Message[] } {
   const threads = db
@@ -152,8 +178,8 @@ export function deleteThread(id: string) {
   db.prepare(`DELETE FROM threads WHERE id = ?`).run(id);
 }
 
-export function addMessage(threadId: string, role: Role, content: string): Message {
-  const msg: Message = { id: crypto.randomUUID(), threadId, role, content, createdAt: Date.now() };
+export function addMessage(threadId: string, role: Role, content: string, id: string = crypto.randomUUID()): Message {
+  const msg: Message = { id, threadId, role, content, createdAt: Date.now() };
   db.prepare(
     `INSERT INTO messages (id, thread_id, role, content, created_at)
      VALUES (@id, @threadId, @role, @content, @createdAt)`,

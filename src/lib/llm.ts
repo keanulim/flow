@@ -12,16 +12,24 @@ Use Markdown formatting.`;
 
 export type Usage = { input: number; cacheRead: number; cacheWrite: number; output: number };
 
+export type StreamOptions = {
+  /** Use the free mock reply even if an API key is set (dev testing).
+   *  "think" adds a 2s pause before the first chunk, like the model's thinking phase. */
+  mock?: boolean | "think";
+  /** Aborting it stops generation (and billing) mid-reply. */
+  signal?: AbortSignal;
+};
+
 /** Streams the reply as text chunks; returns token usage when done. */
-export function streamReply(ctx: BuiltContext): AsyncGenerator<string, Usage | null> {
-  return process.env.ANTHROPIC_API_KEY ? streamClaude(ctx) : streamMock(ctx);
+export function streamReply(ctx: BuiltContext, opts: StreamOptions = {}): AsyncGenerator<string, Usage | null> {
+  return process.env.ANTHROPIC_API_KEY && !opts.mock ? streamClaude(ctx, opts) : streamMock(ctx, opts);
 }
 
 // Created on first use, not at import: if the key is added to .env.local while
 // the dev server is running, a client built at import time would have no key.
 let client: Anthropic | undefined;
 
-async function* streamClaude(ctx: BuiltContext): AsyncGenerator<string, Usage | null> {
+async function* streamClaude(ctx: BuiltContext, { signal }: StreamOptions): AsyncGenerator<string, Usage | null> {
   const messages = withForkBreakpoint(ctx);
 
   client ??= new Anthropic();
@@ -33,14 +41,13 @@ async function* streamClaude(ctx: BuiltContext): AsyncGenerator<string, Usage | 
     // Second breakpoint: auto-caches the tail, so the next turn in this
     // same thread reuses everything up to here.
     cache_control: { type: "ephemeral" },
-    // Opus 5.5 always uses adaptive thinking; effort is the speed/depth dial.
-    // medium is this model's default, set explicitly so it's easy to tune.
+    // Adaptive thinking is on by default; effort is the speed/depth dial.
     output_config: { effort: "medium" },
     // If a safety classifier declines, retry server-side on a suitable model
     // instead of leaving the user with a dead end.
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
-  });
+  }, { signal }); // aborting cancels the HTTP request to the API
 
   for await (const event of stream) {
     if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
@@ -72,7 +79,13 @@ function withForkBreakpoint({ messages, inheritedUntil }: BuiltContext): Anthrop
 }
 
 /** No API key? Reply with exactly what the model *would* have received. */
-async function* streamMock({ messages, inheritedUntil }: BuiltContext): AsyncGenerator<string, Usage | null> {
+async function* streamMock({ messages, inheritedUntil }: BuiltContext, { signal, mock }: StreamOptions): AsyncGenerator<string, Usage | null> {
+  if (mock === "think") {
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(resolve, 2000);
+      signal?.addEventListener("abort", () => (clearTimeout(t), reject(signal.reason)), { once: true });
+    });
+  }
   const lines = [
     `**Mock mode** (set \`ANTHROPIC_API_KEY\` in \`.env.local\` for real replies). This thread sent **${messages.length}** messages:`,
     "",
@@ -83,6 +96,7 @@ async function* streamMock({ messages, inheritedUntil }: BuiltContext): AsyncGen
     }),
   ];
   for (const word of lines.join("\n").split(/(?<=\s)/)) {
+    signal?.throwIfAborted();
     yield word;
     await new Promise((r) => setTimeout(r, 8));
   }
