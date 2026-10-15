@@ -19,9 +19,10 @@ const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")
 const label = (e: VaultEntry) => (e.type === "file" ? e.name.replace(/\.md$/i, "") : e.name);
 
 /**
- * The vault as a folder tree, Obsidian style: click to open, double-click (or
- * ✎) to rename, drag onto a folder (or the empty area for the top level) to
- * move, ✕ to send to the vault's .trash. Clicking a folder selects it as the
+ * The vault as a folder tree, Obsidian style: click to open, drag onto a folder
+ * (or the empty area for the top level) to move. Right-click for rename and
+ * delete (to the vault's .trash), and on folders or the empty area, new note /
+ * new folder. Double-click also renames. Clicking a folder selects it as the
  * place new notes and folders go; each folder also has its own "+".
  */
 export default function FileTree({ entries, activePath, filter, onOpen, onCreate, onRename, onMove, onDelete }: Props) {
@@ -31,6 +32,8 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
   // Where new items go: a clicked folder, "" for the top level, or null = follow the open note.
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [ghost, setGhost] = useState<{ name: string; x: number; y: number } | null>(null);
+  // Right-click menu: for an entry, or (entry null) for the empty area = the top level.
+  const [menu, setMenu] = useState<{ entry: VaultEntry | null; x: number; y: number } | null>(null);
 
   // Remember open folders across visits (read after mount: no localStorage on the server).
   useEffect(() => {
@@ -63,6 +66,11 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
     if (!path) return;
     if (parent) setOpen(parent, true);
     setRenaming(path); // name it right away
+  };
+
+  const remove = (e: VaultEntry) => {
+    if (e.type === "folder" && e.children.length && !confirm(`Move the folder “${e.name}” and everything in it to the trash?`)) return;
+    void onDelete(e.path);
   };
 
   // Search: a flat list of notes whose name or folder matches.
@@ -167,6 +175,11 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
             }
           }}
           onDoubleClick={() => setRenaming(e.path)}
+          onContextMenu={(ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            setMenu({ entry: e, x: ev.clientX, y: ev.clientY });
+          }}
           style={{ paddingLeft: 10 + depth * 14 }}
           className={`group flex cursor-pointer items-center gap-1.5 rounded-md py-1.5 pr-1.5 text-sm ${
             dropTarget === e.path
@@ -202,24 +215,10 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
           ) : (
             <span className="min-w-0 flex-1 truncate">{label(e)}</span>
           )}
-          {renaming !== e.path && (
-            <span className="hidden shrink-0 gap-0.5 group-hover:flex">
-              {isFolder && (
-                <IconButton title={`New note in ${e.name}`} onClick={() => void create("file", e.path)}>
-                  +
-                </IconButton>
-              )}
-              <IconButton title="Rename" onClick={() => setRenaming(e.path)}>
-                ✎
-              </IconButton>
-              <IconButton
-                title="Move to trash"
-                onClick={() => {
-                  if (isFolder && e.children.length && !confirm(`Move the folder “${e.name}” and everything in it to the trash?`)) return;
-                  void onDelete(e.path);
-                }}
-              >
-                ✕
+          {renaming !== e.path && isFolder && (
+            <span className="hidden shrink-0 group-hover:flex">
+              <IconButton title={`New note in ${e.name}`} onClick={() => void create("file", e.path)}>
+                +
               </IconButton>
             </span>
           )}
@@ -255,6 +254,10 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
         onClick={(ev) => {
           if (ev.target === ev.currentTarget) setSelectedFolder("");
         }}
+        onContextMenu={(ev) => {
+          ev.preventDefault();
+          setMenu({ entry: null, x: ev.clientX, y: ev.clientY });
+        }}
       >
         {matches ? (
           matches.length ? (
@@ -278,6 +281,89 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
         )}
       </div>
       {ghost && <DragGhost {...ghost} />}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={[
+            ...(menu.entry === null || menu.entry.type === "folder"
+              ? [
+                  { label: "New note", run: () => void create("file", menu.entry?.path ?? "") },
+                  { label: "New folder", run: () => void create("folder", menu.entry?.path ?? "") },
+                ]
+              : []),
+            ...(menu.entry
+              ? [
+                  { label: "Rename", run: () => setRenaming(menu.entry!.path), separator: menu.entry.type === "folder" },
+                  { label: "Delete", run: () => remove(menu.entry!), danger: true },
+                ]
+              : []),
+          ]}
+        />
+      )}
+    </div>
+  );
+}
+
+type MenuItem = { label: string; run: () => void; danger?: boolean; separator?: boolean };
+
+/** A small menu at the pointer. Closes on a click elsewhere, Escape, scroll, or resize. */
+function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+
+  useEffect(() => {
+    // Keep it on screen near the edges.
+    const r = ref.current!.getBoundingClientRect();
+    setPos({ left: Math.min(x, innerWidth - r.width - 8), top: Math.min(y, innerHeight - r.height - 8) });
+    const close = (ev: Event) => {
+      if (ev.type === "pointerdown" && ref.current?.contains(ev.target as Node)) return;
+      onClose();
+    };
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        ev.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("pointerdown", close, true);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, [x, y, onClose]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      onContextMenu={(e) => e.preventDefault()}
+      style={pos}
+      className="fixed z-50 min-w-36 rounded-lg border border-line bg-bg p-1 text-sm shadow-lg"
+    >
+      {items.map((item) => (
+        <div key={item.label}>
+          {item.separator && <div className="my-1 border-t border-line" />}
+          <button
+            role="menuitem"
+            onClick={() => {
+              onClose();
+              item.run();
+            }}
+            className={`block w-full rounded-md px-2.5 py-1.5 text-left hover:bg-hover ${item.danger ? "text-red-600" : "text-fg"}`}
+          >
+            {item.label}
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

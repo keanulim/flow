@@ -7,6 +7,7 @@ import type { Message, Thread } from "@/lib/db";
 import { rehypeAnchors, type Anchor } from "@/lib/rehype-anchors";
 import { STOPPED_NOTE } from "@/lib/shared";
 import { api, ApiError, devMockHeader } from "@/lib/client";
+import type { NoteEvent } from "@/lib/chat-note";
 import ThreadMap from "./ThreadMap";
 import FileTree from "./FileTree";
 import Settings from "./Settings";
@@ -226,13 +227,62 @@ export default function Flow() {
     [openNote, resolveLink, loadFiles, report],
   );
 
+  // ---------- links from notes to chats ----------
+
+  type ThreadInfo = Pick<Thread, "id" | "parentThreadId" | "title" | "kind">;
+  const [chatIndex, setChatIndex] = useState<ThreadInfo[]>([]); // every chat and branch, for [[ suggestions
+  const loadChatIndex = useCallback(async () => {
+    try {
+      setChatIndex(await (await api("/api/threads?all=1")).json());
+    } catch (e) {
+      report(e);
+    }
+  }, [report]);
+  const chatOptions = useMemo(() => {
+    const byId = new Map(chatIndex.map((t) => [t.id, t]));
+    const rootOf = (t: ThreadInfo) => {
+      while (t.parentThreadId && byId.has(t.parentThreadId)) t = byId.get(t.parentThreadId)!;
+      return t;
+    };
+    return chatIndex.map((t) => ({
+      id: t.id,
+      title: t.title,
+      detail: t.parentThreadId ? `${t.kind === "oneoff" ? "side question" : "branch"} · ${rootOf(t).title.slice(0, 30)}` : "chat",
+    }));
+  }, [chatIndex]);
+
+  useEffect(() => void loadChatIndex(), [loadChatIndex]);
+  // Re-style links when either list changes (exists / not created yet / chat deleted).
+  const linksVersion = useMemo(() => ({}), [files, chatIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A linked chat to show once its conversation has loaded (it may be a branch deep inside it).
+  const [pendingChat, setPendingChat] = useState<string | null>(null);
+  const openChat = useCallback(
+    async (id: string) => {
+      try {
+        const { rootId: root } = (await (await api(`/api/threads/${id}/root`)).json()) as { rootId: string };
+        await editor.current?.flush();
+        setPendingChat(id);
+        setHome(false);
+        setQuery("");
+        setRootId(root);
+      } catch (e) {
+        report(e);
+      }
+    },
+    [report],
+  );
+
   const linkHost = useMemo<LinkHost>(
     () => ({
       exists: (target) => resolveLink(target, openNote) !== null,
       open: (target) => void openLink(target),
       notes: () => noteList.map(({ name, folder }) => ({ name, folder })),
+      chats: () => chatOptions,
+      chatExists: (id) => chatIndex.some((t) => t.id === id),
+      openChat: (id) => void openChat(id),
     }),
-    [resolveLink, openNote, openLink, noteList],
+    [resolveLink, openNote, openLink, noteList, chatOptions, chatIndex, openChat],
   );
 
   const goBack = useCallback(async () => {
@@ -257,7 +307,8 @@ export default function Flow() {
     setRootId(null); // clears the tree, map and side panel
     setQuery("");
     void loadFiles();
-  }, [rootId, loadFiles]);
+    void loadChatIndex();
+  }, [rootId, loadFiles, loadChatIndex]);
 
   /** Leave Home: back to the last conversation, else the most recent one. */
   const goToChats = useCallback(() => {
@@ -267,28 +318,60 @@ export default function Flow() {
     setRootId(id);
   }, [conversations]);
 
-  /** Turn the focused chat (and everything branched off it, nothing above) into a note, then open it on Home. */
+  /**
+   * Turn the focused chat (and everything branched off it, nothing above) into
+   * a note. The note opens on Home straight away and fills in as it's written:
+   * the server streams one JSON event per line (see NoteEvent).
+   */
   const [makingNote, setMakingNote] = useState<string | null>(null); // thread id being summarized
+  const [liveNote, setLiveNote] = useState<{ path: string; markdown: string } | null>(null);
   const makeNote = useCallback(
     async (threadId: string) => {
       setMakingNote(threadId);
+      let path: string | null = null;
+      let finished = false;
       try {
         const res = await api(`/api/threads/${threadId}/note`, { method: "POST", headers: devMockHeader() });
-        const { path } = (await res.json()) as { path: string };
-        await loadFiles(); // before switching, so Home doesn't flash an empty file list
-        lastConversation.current = rootId; // "Chats" comes back here
-        setHome(true);
-        setRootId(null);
-        setQuery("");
-        setNoteHistory([]);
-        setOpenNote(path);
+        const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+        let buffer = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += value;
+          const lines = buffer.split("\n");
+          buffer = lines.pop()!; // a partial line waits for the rest
+          for (const line of lines.filter(Boolean)) {
+            const e = JSON.parse(line) as NoteEvent;
+            if (e.type === "start") {
+              path = e.path;
+              setLiveNote({ path, markdown: "" });
+              void loadChatIndex(); // fresh chat titles for [[ suggestions
+              await loadFiles(); // before switching, so Home doesn't flash an empty file list
+              lastConversation.current = rootId; // "Chats" comes back here
+              setHome(true);
+              setRootId(null);
+              setQuery("");
+              setNoteHistory([]);
+              setOpenNote(path);
+            } else if (e.type === "snapshot") {
+              setLiveNote((n) => (n && { ...n, markdown: e.markdown }));
+            } else if (e.type === "done") {
+              finished = true;
+            } else if (e.type === "error") {
+              throw new ApiError(`The note stopped partway: ${e.error}`);
+            }
+          }
+        }
+        // The server keeps going without us, so the note will still be finished and saved.
+        if (!finished) throw new ApiError("Lost the live view. The note is still being written and will be saved; reopen it in a moment.");
       } catch (e) {
         report(e);
       } finally {
+        setLiveNote(null); // the editor reloads the saved file
         setMakingNote(null);
       }
     },
-    [rootId, loadFiles, report],
+    [rootId, loadFiles, loadChatIndex, report],
   );
 
   // ---------- vault (Home) ----------
@@ -399,6 +482,18 @@ export default function Flow() {
     },
     [byId, focus, goTo],
   );
+
+  // Show a linked chat once its conversation is loaded: a side question opens on
+  // the side of its parent, any other thread in the center.
+  useEffect(() => {
+    if (!pendingChat) return;
+    const t = byId.get(pendingChat);
+    if (!t) return; // not loaded yet
+    setPendingChat(null);
+    if (!t.parentThreadId) return; // the main chat: already in the center
+    if (t.kind === "oneoff") goTo(t.parentThreadId, t.id);
+    else goTo(t.id);
+  }, [pendingChat, byId, goTo]);
 
   const goUp = useCallback(() => {
     if (focusThread?.parentThreadId) goTo(focusThread.parentThreadId, focusThread.id);
@@ -850,11 +945,14 @@ export default function Flow() {
         <main className="min-w-0 flex-1">
           {openNote ? (
             <NoteEditor
+              // Remounts when a note finishes writing, so it loads the saved file.
+              key={liveNote?.path === openNote ? "live" : "file"}
+              live={liveNote?.path === openNote ? liveNote.markdown : undefined}
               ref={editor}
               path={openNote}
               onError={report}
               links={linkHost}
-              linksVersion={files}
+              linksVersion={linksVersion}
               back={
                 noteHistory.length
                   ? { label: noteHistory.at(-1)!.split("/").pop()!.replace(/\.md$/i, ""), go: () => void goBack() }

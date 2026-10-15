@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
 import { unified } from "unified";
-import { buildTree, clean, type ChatNode, placeToggles, promptFor, renderNote, summarizeTree } from "../src/lib/chat-note";
+import { buildTree, clean, type ChatNode, placeToggles, promptFor, renderNote, splitTitle, summarizeTree } from "../src/lib/chat-note";
 import type { Message, Thread } from "../src/lib/db";
 import { missingBlankLines, parseToggles } from "../src/lib/toggles";
 
@@ -50,6 +50,9 @@ check("only the clicked thread and below; children ordered by fork point; empty 
 check("prompt has the thread's own messages only", promptFor(tree).includes("How does caching work?") && !promptFor(tree).includes("q b1") && !promptFor(tree).includes("SHOULD NOT"));
 check("branch prompt includes the excerpt", promptFor(tree.children[0]).includes('Excerpt it branched from: "the *cache* key"'));
 check("one-off prompt asks for a super brief note", /super brief/.test(promptFor(tree.children[1])));
+check("branch and one-off prompts ask for a title; the page prompt doesn't", /"Title: \.\.\."/.test(promptFor(tree.children[0])) && /one to three words/.test(promptFor(tree.children[1])) && !/"Title: /.test(promptFor(tree)));
+check("splitTitle: plain, bold and quoted title lines", JSON.stringify([splitTitle("Title: Answer\n\n- x"), splitTitle("**Title:** “How carrying works”\n- y"), splitTitle("- no title")]) ===
+  JSON.stringify([{ title: "Answer", body: "- x" }, { title: "How carrying works", body: "- y" }, { title: null, body: "- no title" }]));
 check("prompt lists the branches with markers and their highlights", promptFor(tree).includes('{{branch-1}}: highlighted "the *cache* key"') && promptFor(tree).includes("{{branch-3}}") && !promptFor(tree.children[1]).includes("{{branch"));
 
 // --- placing toggles where their topic comes up ---
@@ -64,22 +67,34 @@ check("a marked heading line keeps its heading", place("## Topic {{branch-1}}\n-
 
 (async () => {
   let running = 0, peak = 0;
-  const summaries = await summarizeTree(tree, async (n) => {
+  const snapshots: string[] = [];
+  const fake = (n: ChatNode) => n.kind === "page" ? "## Basics\n\n- caching stores results\n- invalidation is hard {{branch-2}}" : n.thread.id === "o1" ? "Title: Why\n\n- note for o1" : n.thread.id === "nested" ? "- nested note\n\n```js\nconsole.log('</details>')" : `- note for ${n.thread.id}`;
+  const summaries = await summarizeTree(tree, async function* (n) {
     running++; peak = Math.max(peak, running);
-    await new Promise((r) => setTimeout(r, 10));
+    for (const chunk of fake(n).match(/[\s\S]{1,3}/g)!) { // stream it 3 characters at a time
+      await new Promise((r) => setTimeout(r, 1));
+      yield chunk;
+    }
     running--;
-    return n.kind === "page" ? "## Basics\n\n- caching stores results\n- invalidation is hard {{branch-2}}" : n.thread.id === "nested" ? "- nested note\n\n```js\nconsole.log('</details>')" : `- note for ${n.thread.id}`;
-  }, 3);
+  }, { concurrency: 3, onProgress: (partial, writing) => snapshots.push(renderNote(tree, partial, { writing, date: new Date(2026, 9, 15) })) });
   check("summaries run in parallel, capped", peak === 3, `peak ${peak}`);
-  check("every thread summarized once", summaries.size === 6);
+  check("every thread summarized once, streamed text joined back exactly", summaries.size === 6 && summaries.get("o1") === "Title: Why\n\n- note for o1");
 
-  const md = renderNote(tree, summaries, new Date(2026, 9, 15));
+  // --- while it's being written ---
+  check("live snapshots: never a half-typed marker or Title: line", snapshots.every((md) => !/\{\{|^Title/m.test(md)), snapshots.find((md) => /\{\{|^Title/m.test(md))?.slice(0, 300));
+  check("live snapshots: unstarted sections say Writing…, toggles open", snapshots.some((md) => md.includes("*Writing…*")) && snapshots.slice(0, -1).every((md) => !md.includes("<details>\n")));
+  check("live snapshots: each one is a well-formed note (toggles closed off)", snapshots.every((md) => parseToggles(Text.of(md.split("\n"))).toggles.every((t) => t.closeLine !== null)));
+  check("a toggle's model title shows once its line is complete", snapshots.some((md) => md.includes("<summary>Why</summary>")) && snapshots.some((md) => md.includes("<summary>Title o1</summary>")));
+
+  const md = renderNote(tree, summaries, { date: new Date(2026, 9, 15) });
   console.log("\n----- note -----\n" + md + "----------------\n");
   const doc = Text.of(md.split("\n"));
   const p = parseToggles(doc);
   const shape = p.toggles.map((t) => `${doc.sliceString(t.titleFrom, t.titleTo)}@${t.depth}${t.open ? "+" : ""}`);
   check("editor sees the toggles nested correctly, all closed (o1 placed at its marker, the rest at the end)",
-    JSON.stringify(shape) === JSON.stringify(["Title o1@0", "Title b1@0", "Title nested@1", "Title o2@1", "Title b2@0"]), JSON.stringify(shape));
+    JSON.stringify(shape) === JSON.stringify(["Why@0", "Title b1@0", "Title nested@1", "Title o2@1", "Title b2@0"]), JSON.stringify(shape));
+  check("model-written title replaces the thread title; no Title: line left in the body", md.includes("<summary>Why</summary>") && !/^Title:/m.test(md));
+  check("a toggle placed under its line doesn't quote the excerpt again; an unplaced one does", !md.includes("On “TTL”") && md.includes("On “the \\*cache\\* key”"));
   check("every toggle is closed off and has its blank line after <summary>", p.toggles.every((t) => t.closeLine !== null && t.spacerLine !== null));
   check("no blank lines missing (editor won't rewrite the file on open)", missingBlankLines(doc).length === 0, JSON.stringify(missingBlankLines(doc)));
   check("a </details> in model text is escaped, but left alone inside code", clean("x </details>\n```\n</details>\n```") === "x &lt;/details>\n```\n</details>\n```");

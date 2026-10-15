@@ -25,6 +25,13 @@ import type { Message, Thread } from "./db";
 
 export type NoteKind = "page" | "branch" | "oneoff";
 
+/** One line of the "make note" response stream (newline-delimited JSON). */
+export type NoteEvent =
+  | { type: "start"; path: string } // the file exists: open it
+  | { type: "snapshot"; markdown: string } // the note so far
+  | { type: "done"; path: string } // finished and saved
+  | { type: "error"; error: string };
+
 export type ChatNode = {
   thread: Thread;
   messages: Message[];
@@ -65,10 +72,24 @@ Don't start with a title or heading that restates the chat's topic: the note alr
 
 const INSTRUCTIONS: Record<NoteKind, string> = {
   page: "Summarize this chat as notes. You can group them under ## or ### headings when there are distinct topics.",
-  branch:
-    "This is a side branch of a larger chat, about the excerpt shown. Summarize it as notes in the same style, but shorter, and with no headings (use **bold** labels instead); it will sit inside a collapsible section.",
-  oneoff: "This is a quick side question about the excerpt shown. Write a super brief note: one or two short bullet points of what it covered and the answer. No headings.",
+  branch: `This is a side branch of a larger chat, about the excerpt shown. Summarize it as notes in the same style, but shorter, and with no headings (use **bold** labels instead); it will sit inside a collapsible section.
+${titleRule("a short title (up to about 8 words) that sums up what this branch explains or adds, e.g. \"How carrying works\" or \"Why the shield had a Λ\"")}`,
+  oneoff: `This is a quick side question about the excerpt shown. Write a super brief note: one or two short bullet points of what it covered and the answer. No headings.
+${titleRule("an extremely short title, one to three words, e.g. \"Answer\", \"Why\", \"Example\", \"Origin\"")}`,
 };
+
+/** Branch and side-question toggles get a title from the model, on the first line of its reply. */
+function titleRule(what: string): string {
+  return `Start your reply with one line "Title: ...": ${what}. The collapsible section sits right under the line of notes that mentions the excerpt, so the title must not repeat the excerpt or that line. Then a blank line, then the notes.`;
+}
+
+/** "Title: Foo\n\nnotes" -> { title: "Foo", body: "notes" }. No title line -> the whole text is the body. */
+export function splitTitle(text: string): { title: string | null; body: string } {
+  const m = /^\s*\**title:?\**:?\s*(.+?)\s*(?:\n|$)/i.exec(text);
+  if (!m) return { title: null, body: text };
+  const title = m[1].replace(/^\*+|\*+$/g, "").replace(/^["“]|["”]$/g, "").trim();
+  return { title: title || null, body: text.slice(m[0].length).trim() };
+}
 
 export const MAX_TOKENS: Record<NoteKind, number> = { page: 4000, branch: 2500, oneoff: 400 };
 
@@ -98,14 +119,18 @@ const MARKER = /\s*\{\{branch-(\d+)\}\}/g;
  * paragraph that continues, a bullet with indented sub-bullets) the toggle
  * waits until that block ends. Unplaced toggles go at the end.
  */
-export function placeToggles(summary: string, toggles: string[]): string {
+export function placeToggles(summary: string, toggles: (string | ((placed: boolean) => string))[]): string {
+  const render = (i: number, placed: boolean) => {
+    const t = toggles[i];
+    return typeof t === "string" ? t : t(placed);
+  };
   const lines = summary.split("\n");
   const out: string[] = [];
   const placed = new Set<number>();
   let pending: number[] = [];
   let inFence = false;
   const flush = () => {
-    for (const i of pending) out.push("", toggles[i], "");
+    for (const i of pending) out.push("", render(i, true), "");
     pending = [];
   };
   lines.forEach((line, k) => {
@@ -124,30 +149,51 @@ export function placeToggles(summary: string, toggles: string[]): string {
     if (pending.length && canSplit) flush();
   });
   flush();
-  toggles.forEach((t, i) => placed.has(i) || out.push("", t, ""));
+  toggles.forEach((_, i) => placed.has(i) || out.push("", render(i, false), ""));
   // Collapse the extra blank lines added around toggles.
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-/** Summarize every thread in the tree, a few at a time. Returns summaries by thread id. */
+/**
+ * Summarize every thread in the tree, a few at a time. `summarize` streams:
+ * it yields text chunks, and `onProgress` hears about every one, with the
+ * summaries so far and which threads are still being written.
+ */
 export async function summarizeTree(
   root: ChatNode,
-  summarize: (node: ChatNode) => Promise<string>,
-  concurrency = 4,
+  summarize: (node: ChatNode) => AsyncIterable<string>,
+  { concurrency = 4, onProgress }: { concurrency?: number; onProgress?: (summaries: Map<string, string>, writing: Set<string>) => void } = {},
 ): Promise<Map<string, string>> {
   const all: ChatNode[] = [];
   const walk = (n: ChatNode) => (all.push(n), n.children.forEach(walk));
   walk(root);
   const out = new Map<string, string>();
+  const writing = new Set(all.filter((n) => n.messages.length).map((n) => n.thread.id));
   let next = 0;
   const worker = async () => {
     while (next < all.length) {
       const n = all[next++];
-      out.set(n.thread.id, n.messages.length ? await summarize(n) : "");
+      const id = n.thread.id;
+      out.set(id, "");
+      if (n.messages.length) {
+        for await (const chunk of summarize(n)) {
+          out.set(id, out.get(id)! + chunk);
+          onProgress?.(out, writing);
+        }
+      }
+      writing.delete(id);
+      onProgress?.(out, writing);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, all.length) }, worker));
   return out;
+}
+
+/** A summary still being written, cut back to what's safe to show: no half-typed "Title:" line or {{branch-N}} marker. */
+function settled(text: string): string {
+  let t = text.replace(/\{\{[^}\n]*\}?$/, ""); // "{{bra", "{{branch-2}"
+  if (!t.includes("\n") && /^\s*\**\s*t(i(t(le?)?)?)?/i.test(t)) t = ""; // a title line that isn't finished yet
+  return t;
 }
 
 /** Model output, made safe to put inside a toggle: no stray <details> tags, no unclosed code fence. */
@@ -162,22 +208,40 @@ export function clean(md: string): string {
 }
 
 /** A toggle title: one line, no tags. */
-const titleText = (s: string) => s.replace(/[<>]/g, "").replace(/\s+/g, " ").trim() || "Untitled";
+const titleText = (s: string) => s.replace(/[<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 100) || "Untitled";
 const quoted = (s: string) => `*On “${s.replace(/\s+/g, " ").trim().replace(/\*/g, "\\*")}”*`;
 
 /** The note's Markdown, from the tree and its summaries. */
-export function renderNote(root: ChatNode, summaries: Map<string, string>, date = new Date()): string {
-  const toggle = (n: ChatNode): string => {
-    const body = [n.thread.anchorText ? quoted(n.thread.anchorText) : "", placeToggles(clean(summaries.get(n.thread.id) ?? ""), n.children.map(toggle))].filter(Boolean);
+/**
+ * The note's Markdown, from the tree and its summaries. While it's being
+ * written (`writing` = threads not finished yet), unfinished summaries are
+ * trimmed to what's safe to show, empty ones say "Writing…", and toggles are
+ * open so the branches can be watched too; the saved note has them closed.
+ */
+export function renderNote(
+  root: ChatNode,
+  summaries: Map<string, string>,
+  { date = new Date(), writing }: { date?: Date; writing?: Set<string> } = {},
+): string {
+  const text = (n: ChatNode) => {
+    const raw = summaries.get(n.thread.id) ?? "";
+    return writing?.has(n.thread.id) ? settled(raw) : raw;
+  };
+  const placeholder = (n: ChatNode, body: string) => (writing?.has(n.thread.id) && !body.trim() ? "*Writing…*" : body);
+  const tag = writing?.size ? "<details open>" : "<details>";
+  // `placed`: the toggle sits right under the line about its excerpt, so quoting the excerpt again would be redundant.
+  const toggle = (n: ChatNode) => (placed: boolean): string => {
+    const { title, body: notes } = splitTitle(text(n));
+    const body = [!placed && n.thread.anchorText ? quoted(n.thread.anchorText) : "", placeToggles(placeholder(n, clean(notes)), n.children.map(toggle))].filter(Boolean);
     // Blank line after <summary> so the body parses as Markdown; </details> may follow the body directly.
-    return `<details>\n<summary>${titleText(n.thread.title)}</summary>\n\n${body.join("\n\n") || "*(empty)*"}\n</details>`;
+    return `${tag}\n<summary>${titleText(title ?? n.thread.title)}</summary>\n\n${body.join("\n\n") || "*(empty)*"}\n</details>`;
   };
   const when = date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
   const blocks = [
     `# ${titleText(root.thread.title)}`,
-    `*Notes from a chat · ${when}*`,
+    `*${when}*`,
     root.thread.anchorText ? quoted(root.thread.anchorText) : "",
-    placeToggles(clean(summaries.get(root.thread.id) ?? ""), root.children.map(toggle)),
+    placeToggles(placeholder(root, clean(text(root))), root.children.map(toggle)),
   ].filter(Boolean);
   // Ends with a blank line after the last </details>, plus the empty line the editor keeps there.
   return blocks.join("\n\n") + "\n\n";

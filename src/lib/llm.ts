@@ -107,16 +107,26 @@ export type CompleteOptions = {
   system: string;
   prompt: string;
   maxTokens: number;
-  /** Fixed placeholder text instead of an API call (dev testing, or no key). */
+  /** Placeholder text instead of an API call (dev testing, or no key). Streams slowly so it can be watched. */
   mock?: boolean;
   signal?: AbortSignal;
 };
 
-/** One whole reply, not streamed: for background jobs like summarizing a chat into a note. */
-export async function complete({ system, prompt, maxTokens, mock, signal }: CompleteOptions): Promise<string> {
-  if (!process.env.ANTHROPIC_API_KEY || mock) return `_(Mock summary: set \`ANTHROPIC_API_KEY\` for a real one.)_\n\n${mockSummary(prompt)}`;
+/**
+ * One reply as a stream of text chunks, without the chat's caching setup: for
+ * background jobs like summarizing a chat into a note.
+ */
+export async function* streamCompletion({ system, prompt, maxTokens, mock, signal }: CompleteOptions): AsyncGenerator<string> {
+  if (!process.env.ANTHROPIC_API_KEY || mock) {
+    for (const word of mockSummary(prompt).split(/(?<=\s)/)) {
+      signal?.throwIfAborted();
+      yield word;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return;
+  }
   client ??= new Anthropic();
-  const msg = await client.beta.messages.create(
+  const stream = client.beta.messages.stream(
     {
       model: MODEL,
       max_tokens: maxTokens,
@@ -128,9 +138,15 @@ export async function complete({ system, prompt, maxTokens, mock, signal }: Comp
     },
     { signal },
   );
-  const text = msg.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("").trim();
-  if (msg.stop_reason === "refusal" || !text) throw new Error("The model declined to summarize this chat");
-  return text;
+  let any = false;
+  for await (const event of stream) {
+    if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+      any = true;
+      yield event.delta.text;
+    }
+  }
+  const final = await stream.finalMessage();
+  if (final.stop_reason === "refusal" || !any) throw new Error("The model declined to summarize this chat");
 }
 
 /** First line of each message in the transcript, as bullets; branch markers go on the first line mentioning their excerpt. */
@@ -140,5 +156,6 @@ function mockSummary(prompt: string): string {
     const i = lines.findIndex((l) => l.toLowerCase().includes(excerpt.toLowerCase()));
     if (i >= 0) lines[i] += ` ${marker}`;
   }
-  return lines.join("\n") || "- (empty chat)";
+  const notes = `_(Mock summary: set \`ANTHROPIC_API_KEY\` for a real one.)_\n\n${lines.join("\n") || "- (empty chat)"}`;
+  return /Start your reply with one line "Title: \.\.\."/.test(prompt) ? `Title: Mock title\n\n${notes}` : notes;
 }

@@ -11,7 +11,12 @@ import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type Vi
  *    A link to a page that doesn't exist yet is dashed; opening it creates it.
  *  - Select text and press ⌘K: the text becomes a link to a page of that name,
  *    which is created and opened (like branching a chat from a highlight).
- *  - Typing `[[` suggests existing notes.
+ *  - Typing `[[` suggests existing notes, and chats.
+ *
+ * Links to chats are ordinary Markdown links with a chat: address,
+ * `[Chat title](chat:<thread id>)`, so they survive the chat being renamed and
+ * can point at a branch. They look like page links, with an overline instead
+ * of an underline. Picking a chat in the `[[` suggestions inserts one.
  *
  * The editor doesn't know about files: the app supplies a LinkHost.
  */
@@ -20,7 +25,16 @@ export type LinkHost = {
   exists: (target: string) => boolean;
   open: (target: string) => void; // open the page, creating it if needed
   notes: () => { name: string; folder: string }[];
+  chats: () => { id: string; title: string; detail: string }[]; // for the [[ suggestions
+  chatExists: (id: string) => boolean;
+  openChat: (id: string) => void;
 };
+
+export const CHAT_PREFIX = "chat:";
+const CHAT_LINK = /\[([^[\]\n]+)\]\(chat:([\w-]+)\)/g;
+
+/** `[title](chat:id)`, with brackets in the title swapped for parentheses so the link stays intact. */
+export const chatLink = (title: string, id: string) => `[${title.replace(/\[/g, "(").replace(/\]/g, ")").replace(/\s+/g, " ").trim() || "Chat"}](${CHAT_PREFIX}${id})`;
 
 const LINK = /\[\[([^[\]\n|]+)(?:\|([^[\]\n]+))?\]\]/g;
 const FENCE = /^\s*(```|~~~)/;
@@ -44,7 +58,15 @@ type Found = { from: number; to: number; target: string; labelFrom: number; labe
 
 /** Every link in the document (outside code fences). */
 export function findLinks(state: EditorState): Found[] {
-  const out: Found[] = [];
+  return scan(state).pages;
+}
+
+type FoundChat = { from: number; to: number; id: string; labelFrom: number; labelTo: number };
+
+/** Page links and chat links, outside code fences. */
+function scan(state: EditorState): { pages: Found[]; chats: FoundChat[] } {
+  const pages: Found[] = [];
+  const chats: FoundChat[] = [];
   let inFence = false;
   for (let n = 1; n <= state.doc.lines; n++) {
     const line = state.doc.line(n);
@@ -54,10 +76,14 @@ export function findLinks(state: EditorState): Found[] {
       const from = line.from + m.index!;
       const to = from + m[0].length;
       const labelFrom = m[2] !== undefined ? from + 2 + m[1].length + 1 : from + 2;
-      out.push({ from, to, target: linkTarget(m[1]), labelFrom, labelTo: to - 2 });
+      pages.push({ from, to, target: linkTarget(m[1]), labelFrom, labelTo: to - 2 });
+    }
+    for (const m of line.text.matchAll(CHAT_LINK)) {
+      const from = line.from + m.index!;
+      chats.push({ from, to: from + m[0].length, id: m[2], labelFrom: from + 1, labelTo: from + 1 + m[1].length });
     }
   }
-  return out;
+  return { pages, chats };
 }
 
 function activeLines(state: EditorState): Set<number> {
@@ -73,7 +99,19 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
     const host = getHost();
     const active = activeLines(view.state);
     const decos: Range<Decoration>[] = [];
-    for (const l of findLinks(view.state)) {
+    const { pages, chats } = scan(view.state);
+    for (const c of chats) {
+      const cls = `cm-chatlink${host.chatExists(c.id) ? "" : " cm-chatlink-missing"}`;
+      const attributes = { "data-chat": c.id, title: host.chatExists(c.id) ? "Open chat" : "This chat no longer exists" };
+      if (active.has(view.state.doc.lineAt(c.from).number)) {
+        decos.push(Decoration.mark({ class: `${cls} cm-wikilink-raw`, attributes }).range(c.from, c.to));
+      } else {
+        decos.push(Decoration.replace({}).range(c.from, c.labelFrom));
+        decos.push(Decoration.mark({ class: cls, attributes }).range(c.labelFrom, c.labelTo));
+        decos.push(Decoration.replace({}).range(c.labelTo, c.to));
+      }
+    }
+    for (const l of pages) {
       const cls = `cm-wikilink${host.exists(l.target) ? "" : " cm-wikilink-new"}`;
       const attributes = { "data-link": l.target };
       if (active.has(view.state.doc.lineAt(l.from).number)) {
@@ -104,12 +142,13 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
 
   const clicks = EditorView.domEventHandlers({
     mousedown(e) {
-      const el = (e.target as HTMLElement).closest?.<HTMLElement>(".cm-wikilink");
+      const el = (e.target as HTMLElement).closest?.<HTMLElement>(".cm-wikilink, .cm-chatlink");
       if (!el || e.button !== 0) return false;
       const editing = el.classList.contains("cm-wikilink-raw"); // cursor is on this line
       if (editing && !(e.metaKey || e.ctrlKey)) return false; // plain click while editing: place the cursor
       e.preventDefault();
-      getHost().open(el.dataset.link!);
+      if (el.dataset.chat) getHost().openChat(el.dataset.chat);
+      else getHost().open(el.dataset.link!);
       return true;
     },
   });
@@ -128,26 +167,45 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
       getHost().open(name);
       return true;
     }
-    const here = findLinks(state).find((l) => sel.head >= l.from && sel.head <= l.to);
+    const { pages, chats } = scan(state);
+    const here = pages.find((l) => sel.head >= l.from && sel.head <= l.to);
     if (here) {
       getHost().open(here.target);
+      return true;
+    }
+    const chat = chats.find((l) => sel.head >= l.from && sel.head <= l.to);
+    if (chat) {
+      getHost().openChat(chat.id);
       return true;
     }
     view.dispatch({ changes: { from: sel.head, insert: "[[]]" }, selection: { anchor: sel.head + 2 }, userEvent: "input.link" });
     return true;
   };
 
-  /** After `[[`: suggest existing notes. Picking one completes the link. */
+  /** After `[[`: suggest existing notes, then chats. Picking one completes the link. */
   const complete = (ctx: CompletionContext): CompletionResult | null => {
     const before = ctx.matchBefore(/\[\[[^[\]\n|]*/);
     if (!before) return null;
     const after = ctx.state.sliceDoc(ctx.pos, ctx.pos + 2);
+    const host = getHost();
     return {
       from: before.from + 2,
       validFor: /^[^[\]\n|]*$/,
-      options: getHost()
-        .notes()
-        .map(({ name, folder }) => ({ label: name, detail: folder || undefined, apply: after === "]]" ? name : `${name}]]` })),
+      options: [
+        ...host.notes().map(({ name, folder }) => ({ label: name, detail: folder || undefined, apply: after === "]]" ? name : `${name}]]` })),
+        ...host.chats().map(({ id, title, detail }) => ({
+          label: title,
+          detail,
+          type: "chat",
+          boost: -1, // notes first when both match
+          // Replace the whole [[...]] with a chat link.
+          apply: (view: EditorView, _c: unknown, from: number, to: number) => {
+            const end = view.state.sliceDoc(to, to + 2) === "]]" ? to + 2 : to;
+            const insert = chatLink(title, id);
+            view.dispatch({ changes: { from: from - 2, to: end, insert }, selection: { anchor: from - 2 + insert.length }, userEvent: "input.complete" });
+          },
+        })),
+      ],
     };
   };
 
@@ -155,6 +213,7 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
   // tinted fill + solid underline; a page not created yet is dashed with no fill,
   // like an unsaved side question.
   const tint = (pct: number) => `color-mix(in srgb, var(--accent) ${pct}%, transparent)`;
+  const red = (pct: number) => `color-mix(in srgb, var(--chat-link) ${pct}%, transparent)`; // chat links
   const theme = EditorView.theme({
     ".cm-wikilink": { color: "inherit", backgroundColor: tint(14), borderBottom: `1.5px solid ${tint(55)}`, borderRadius: "2px", cursor: "pointer", transition: "background 120ms" },
     ".cm-wikilink *": { color: "inherit" }, // the Markdown highlighter colors [[...]] as a link
@@ -162,6 +221,11 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
     ".cm-wikilink-new": { backgroundColor: "transparent", borderBottom: `1.5px dashed ${tint(70)}`, borderRadius: "0" },
     ".cm-wikilink-new:hover": { backgroundColor: tint(10) },
     ".cm-wikilink-raw": { cursor: "text" },
+    // Chat links: the same highlight in light red with an overline (a border on top) instead of an underline.
+    ".cm-chatlink": { color: "inherit", backgroundColor: red(14), borderTop: `1.5px solid ${red(55)}`, borderRadius: "2px", cursor: "pointer", transition: "background 120ms" },
+    ".cm-chatlink *": { color: "inherit" },
+    ".cm-chatlink:hover": { backgroundColor: red(24) },
+    ".cm-chatlink-missing": { backgroundColor: "transparent", borderTop: `1.5px dashed ${red(70)}`, borderRadius: "0", cursor: "default" },
   });
 
   return [plugin, clicks, Prec.high(keymap.of([{ key: "Mod-k", run: linkCommand }])), autocompletion({ override: [complete], activateOnTyping: true }), theme];

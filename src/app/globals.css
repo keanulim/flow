@@ -11,6 +11,7 @@
   --user: #f0efed;
   --accent: #4f46e5;
   --accent-soft: #eef2ff;
+  --chat-link: #ef4444; /* links from notes to chats; used as a light tint */
   /* Map colors: swap these to give the map its own color later */
   --map-path: #a8a29e; /* lines and dots on your current path */
   --map-here: #78716c; /* the dot you're on */
@@ -65,31 +66,4 @@ body {
 .md mark.anchor.oneoff { background: transparent; border-bottom: 1.5px dashed color-mix(in srgb, var(--accent) 70%, transparent); border-radius: 0; }
 .md mark.anchor.oneoff:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .md mark.anchor.oneoff.active { background: color-mix(in srgb, var(--accent) 14%, transparent); border-bottom-color: var(--accent); }
-/* Notes preview: heading sizes match the live editor (chat replies stay compact) */
-.md.note h1 { font-size: 1.85em; line-height: 1.35; }
-.md.note h2 { font-size: 1.45em; line-height: 1.35; }
-.md.note h3 { font-size: 1.2em; line-height: 1.35; }
-
-/* [[links]] in the notes preview */
-/* [[links]] look like chat branch highlights (mark.anchor above); new pages like unsaved side questions */
-.md.note a.wikilink {
-  color: inherit;
-  text-decoration: none;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-bottom: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  border-radius: 2px;
-  cursor: pointer;
-  transition: background 120ms;
-}
-.md.note a.wikilink:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
-.md.note a.wikilink-new { background: transparent; border-bottom: 1.5px dashed color-mix(in srgb, var(--accent) 70%, transparent); border-radius: 0; }
-.md.note a.wikilink-new:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-
-/* Toggles (<details>) in the notes preview */
-.md.note details { margin: 0.25em 0; }
-.md.note details > summary { cursor: pointer; font-weight: 550; list-style: none; display: flex; align-items: center; gap: 0.4em; }
-.md.note details > summary::-webkit-details-marker { display: none; }
-.md.note details > summary::before { content: ""; width: 0.45em; height: 0.45em; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); margin: 0 0.25em 0 0.1em; }
-.md.note details[open] > summary::before { transform: rotate(45deg); }
-.md.note details > :not(summary) { margin-left: 0.55em; padding-left: 1em; border-left: 1px solid var(--line); }
 ::selection { background: var(--accent-soft); }

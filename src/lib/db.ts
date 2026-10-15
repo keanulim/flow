@@ -92,6 +92,28 @@ export function listConversations(): Thread[] {
     .all() as Thread[];
 }
 
+/** Every thread (main chats and branches), for linking to chats from notes. Titles only, no messages. */
+export function listAllThreads(): Pick<Thread, "id" | "parentThreadId" | "title" | "kind">[] {
+  return db
+    .prepare(`SELECT id, parent_thread_id AS parentThreadId, title, kind FROM threads ORDER BY created_at DESC`)
+    .all() as Pick<Thread, "id" | "parentThreadId" | "title" | "kind">[];
+}
+
+/** The main thread a thread belongs to (itself if it is one), or undefined if it doesn't exist. */
+export function getRootId(id: string): string | undefined {
+  const row = db
+    .prepare(
+      `WITH RECURSIVE up(id, parent) AS (
+         SELECT id, parent_thread_id FROM threads WHERE id = ?
+         UNION ALL
+         SELECT t.id, t.parent_thread_id FROM threads t JOIN up ON t.id = up.parent
+       )
+       SELECT id FROM up WHERE parent IS NULL`,
+    )
+    .get(id) as { id: string } | undefined;
+  return row?.id;
+}
+
 /**
  * Conversations (main-thread ids) where any thread title or message contains
  * `query`, case-insensitively. Hits in side threads count for their

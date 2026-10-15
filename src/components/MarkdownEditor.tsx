@@ -20,11 +20,13 @@ type Props = {
   links: LinkHost;
   /** Changes when the set of notes changes (re-styles links as existing / new). */
   linksVersion: unknown;
+  /** Read-only, showing this text as it changes (a note being written). Fixed per mount. */
+  live?: string;
   ref?: React.Ref<MarkdownEditorHandle>;
 };
 
 /** CodeMirror with Obsidian-style live Markdown (see lib/live-markdown.ts). */
-export default function MarkdownEditor({ initial, onChange, onBlur, links, linksVersion, ref }: Props) {
+export default function MarkdownEditor({ initial, onChange, onBlur, links, linksVersion, live, ref }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const callbacks = useRef({ onChange, onBlur, links });
@@ -39,6 +41,7 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
         doc: withTrailingLine(initial),
         extensions: [
           liveMarkdown(() => callbacks.current.links),
+          ...(live !== undefined ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) callbacks.current.onChange(u.state.doc.toString());
             if (u.selectionSet || u.docChanged || u.focusChanged) {
@@ -57,6 +60,21 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
     // Created once per mount on purpose; `initial` only seeds the document.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Live: replace only the part that changed, so the view doesn't jump.
+  useEffect(() => {
+    const v = view.current;
+    if (!v || live === undefined) return;
+    const old = v.state.doc.toString();
+    const next = withTrailingLine(live);
+    if (old === next) return;
+    let start = 0;
+    while (start < old.length && start < next.length && old[start] === next[start]) start++;
+    let end = 0;
+    while (end < old.length - start && end < next.length - start && old[old.length - 1 - end] === next[next.length - 1 - end]) end++;
+    // filter: false skips the toggle editing guards (they'd block changes to hidden tags) and housekeeping.
+    v.dispatch({ changes: { from: start, to: old.length - end, insert: next.slice(start, next.length - end) }, filter: false });
+  }, [live]);
 
   // The note list changed: re-style links (existing vs. not created yet).
   useEffect(() => {

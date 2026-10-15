@@ -28,10 +28,9 @@ const SHORTCUTS: { section: string; items: [keys: string, label: string][] }[] =
   {
     section: "Notes",
     items: [
-      [`${MOD}E`, "Switch between editing and preview"],
       ["#  ##  ###", "Type at the start of a line, then a space, for a heading"],
       [`${MOD}K`, "On selected text: link it to a page (creates it). On a link: open it"],
-      ["[[", "Link to a page; suggests your notes"],
+      ["[[", "Link to a page or a chat; suggests your notes and chats"],
       [`${MOD}⌥←`, "Back to the note you came from"],
       ["/>", "At the start of a line: make it a toggle (collapsible)"],
       ["↵ on a title", "Open toggle: new first line inside. Closed: new line after it"],

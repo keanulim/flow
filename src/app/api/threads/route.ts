@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { createThread, getMessages, getThread, listConversations } from "@/lib/db";
+import { createThread, getMessages, getThread, listAllThreads, listConversations } from "@/lib/db";
 
-/** List conversations (main threads only). */
-export async function GET() {
+/** List conversations (main threads only), or with ?all=1 every thread's id, parent, title and kind. */
+export async function GET(req: Request) {
+  if (new URL(req.url).searchParams.get("all")) return NextResponse.json(listAllThreads());
   return NextResponse.json(listConversations());
 }
 
