@@ -343,6 +343,14 @@ const theme = EditorView.theme({
   ".cm-content": { padding: "0 0 40vh", caretColor: "var(--fg)" },
   ".cm-line": { padding: "0" },
   ".cm-placeholder": { color: "var(--muted)" },
+  // The [[ suggestions, in the app's colors (CodeMirror's default is white and blue).
+  ".cm-tooltip": { backgroundColor: "var(--bg)", color: "var(--fg)", border: "1px solid var(--line)", borderRadius: "8px", boxShadow: "0 8px 24px rgb(0 0 0 / 0.12)", overflow: "hidden" },
+  ".cm-tooltip-autocomplete > ul": { fontFamily: "var(--font-inter), system-ui, sans-serif", fontSize: "14px", maxHeight: "16em", padding: "4px" },
+  ".cm-tooltip-autocomplete > ul > li": { padding: "4px 8px !important", borderRadius: "5px", lineHeight: "1.5" },
+  ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--hover)", color: "var(--fg)" },
+  ".cm-completionDetail": { color: "var(--muted)", fontStyle: "normal", marginLeft: "0.75em", fontSize: "12px" },
+  ".cm-completionMatchedText": { textDecoration: "none", fontWeight: "650" },
+  ".cm-completionIcon": { display: "none" },
   // A blank line between blocks is a gap the size of a rendered page's paragraph spacing.
   ".cm-md-gap": { lineHeight: "0.75em" },
   ".cm-md-li-next": { paddingTop: "0.25em !important" },

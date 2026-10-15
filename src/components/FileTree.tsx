@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { VaultEntry } from "@/lib/vault";
+import ContextMenu from "./ContextMenu";
 
 type Props = {
   entries: VaultEntry[];
@@ -181,9 +182,9 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
             setMenu({ entry: e, x: ev.clientX, y: ev.clientY });
           }}
           style={{ paddingLeft: 10 + depth * 14 }}
-          className={`group flex cursor-pointer items-center gap-1.5 rounded-md py-1.5 pr-1.5 text-sm ${
+          className={`group flex cursor-pointer items-center gap-1.5 rounded-md py-1.5 pr-1.5 text-[13px] leading-5 ${
             dropTarget === e.path
-              ? "bg-hover text-fg ring-1 ring-stone-400"
+              ? "bg-hover text-fg ring-1 ring-line-strong"
               : e.path === activePath || (isFolder && e.path === selectedFolder)
                 ? "bg-hover text-fg"
                 : "text-muted hover:bg-hover hover:text-fg"
@@ -265,7 +266,7 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
               <div
                 key={e.path}
                 onClick={() => onOpen(e.path)}
-                className={`cursor-pointer rounded-md px-2.5 py-1.5 text-sm ${e.path === activePath ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"}`}
+                className={`cursor-pointer rounded-md px-2.5 py-1.5 text-[13px] leading-5 ${e.path === activePath ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"}`}
               >
                 <div className="truncate">{label(e)}</div>
                 {parentOf(e.path) && <div className="truncate text-[11px] text-muted">{parentOf(e.path)}</div>}
@@ -302,68 +303,6 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
           ]}
         />
       )}
-    </div>
-  );
-}
-
-type MenuItem = { label: string; run: () => void; danger?: boolean; separator?: boolean };
-
-/** A small menu at the pointer. Closes on a click elsewhere, Escape, scroll, or resize. */
-function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ left: x, top: y });
-
-  useEffect(() => {
-    // Keep it on screen near the edges.
-    const r = ref.current!.getBoundingClientRect();
-    setPos({ left: Math.min(x, innerWidth - r.width - 8), top: Math.min(y, innerHeight - r.height - 8) });
-    const close = (ev: Event) => {
-      if (ev.type === "pointerdown" && ref.current?.contains(ev.target as Node)) return;
-      onClose();
-    };
-    const key = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") {
-        ev.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener("pointerdown", close, true);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    window.addEventListener("blur", close);
-    window.addEventListener("keydown", key, true);
-    return () => {
-      window.removeEventListener("pointerdown", close, true);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("blur", close);
-      window.removeEventListener("keydown", key, true);
-    };
-  }, [x, y, onClose]);
-
-  return (
-    <div
-      ref={ref}
-      role="menu"
-      onContextMenu={(e) => e.preventDefault()}
-      style={pos}
-      className="fixed z-50 min-w-36 rounded-lg border border-line bg-bg p-1 text-sm shadow-lg"
-    >
-      {items.map((item) => (
-        <div key={item.label}>
-          {item.separator && <div className="my-1 border-t border-line" />}
-          <button
-            role="menuitem"
-            onClick={() => {
-              onClose();
-              item.run();
-            }}
-            className={`block w-full rounded-md px-2.5 py-1.5 text-left hover:bg-hover ${item.danger ? "text-red-600" : "text-fg"}`}
-          >
-            {item.label}
-          </button>
-        </div>
-      ))}
     </div>
   );
 }
@@ -405,7 +344,7 @@ function RenameInput({ initial, onDone }: { initial: string; onDone: (name: stri
         if (e.key === "Escape") finish(null);
       }}
       onBlur={() => finish(value.trim())}
-      className="min-w-0 flex-1 rounded border border-stone-300 bg-bg px-1 py-0 text-sm text-fg outline-none"
+      className="min-w-0 flex-1 rounded border border-line-strong bg-bg px-1 py-0 text-[13px] text-fg outline-none"
     />
   );
 }
@@ -418,7 +357,7 @@ function IconButton({ title, onClick, children }: { title: string; onClick: () =
         e.stopPropagation();
         onClick();
       }}
-      className="flex size-6 items-center justify-center rounded text-xs text-muted hover:bg-stone-200/60 hover:text-fg"
+      className="flex size-6 items-center justify-center rounded text-xs text-muted hover:bg-hover hover:text-fg"
     >
       {children}
     </button>

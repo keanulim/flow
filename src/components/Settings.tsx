@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { currentTheme, setTheme, THEMES, type ThemeId } from "@/lib/theme";
 
 const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 const MOD = isMac ? "⌘" : "Ctrl";
@@ -29,7 +30,7 @@ const SHORTCUTS: { section: string; items: [keys: string, label: string][] }[] =
     section: "Notes",
     items: [
       ["#  ##  ###", "Type at the start of a line, then a space, for a heading"],
-      [`${MOD}K`, "On selected text: link it to a page (creates it). On a link: open it"],
+      [`${MOD}K`, "On selected text: link it to a page (creates it), same as right-click → Link to page. On a link: open it"],
       ["[[", "Link to a page or a chat; suggests your notes and chats"],
       [`${MOD}⌥←`, "Back to the note you came from"],
       ["/>", "At the start of a line: make it a toggle (collapsible)"],
@@ -63,7 +64,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={panel}
         tabIndex={-1}
@@ -78,6 +79,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div className="overflow-y-auto px-5 py-4">
+          <Appearance />
           <h3 className="mb-3 text-xs font-medium tracking-wider text-muted uppercase">Keyboard shortcuts</h3>
           {SHORTCUTS.map(({ section, items }) => (
             <div key={section} className="mb-4">
@@ -93,5 +95,36 @@ export default function Settings({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Light, Paper or Dark. Applies immediately and is remembered on this device. */
+function Appearance() {
+  const [theme, pick] = useState<ThemeId>(currentTheme);
+  return (
+    <section className="mb-6">
+      <h3 className="mb-3 text-xs font-medium tracking-wider text-muted uppercase">Appearance</h3>
+      <div role="radiogroup" aria-label="Theme" className="grid grid-cols-3 gap-2">
+        {THEMES.map((t) => (
+          <button
+            key={t.id}
+            role="radio"
+            aria-checked={theme === t.id}
+            onClick={() => {
+              setTheme(t.id);
+              pick(t.id);
+            }}
+            className={`rounded-lg border p-2 text-left text-sm ${theme === t.id ? "border-accent ring-1 ring-accent" : "border-line hover:border-line-strong"}`}
+          >
+            {/* A tiny preview of the page and its text */}
+            <span className="mb-2 flex h-10 flex-col justify-center gap-1 rounded-md border border-line px-2" style={{ background: t.swatch[0] }}>
+              <span className="block h-1 w-3/4 rounded-full" style={{ background: t.swatch[1] }} />
+              <span className="block h-1 w-1/2 rounded-full opacity-50" style={{ background: t.swatch[1] }} />
+            </span>
+            {t.label}
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }

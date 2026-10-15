@@ -1,19 +1,28 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Message, Thread } from "@/lib/db";
 import { rehypeAnchors, type Anchor } from "@/lib/rehype-anchors";
+import { rehypeFade } from "@/lib/rehype-fade";
 import { STOPPED_NOTE } from "@/lib/shared";
 import { api, ApiError, devMockHeader } from "@/lib/client";
 import type { NoteEvent } from "@/lib/chat-note";
+import { HOME_NOTE, HOME_WELCOME } from "@/lib/home-note";
 import ThreadMap from "./ThreadMap";
 import FileTree from "./FileTree";
 import Settings from "./Settings";
-import NoteEditor, { type NoteEditorHandle } from "./NoteEditor";
+import type { NoteEditorHandle } from "./NoteEditor";
+
+// The notes editor (CodeMirror) is only downloaded once a note is opened, so
+// the chat view doesn't load it.
+const NoteEditor = dynamic(() => import("./NoteEditor"), { ssr: false });
 import type { VaultEntry } from "@/lib/vault";
 import type { LinkHost } from "@/lib/wikilinks";
+
+type Pluggable = NonNullable<Options["rehypePlugins"]>[number]; // one entry of react-markdown's plugin list
 
 type Tree = { threads: Thread[]; messages: Message[] };
 const NO_MESSAGES: Message[] = [];
@@ -95,7 +104,7 @@ export default function Flow() {
   );
 
   useEffect(() => {
-    loadConversations().then((list) => list[0] && setRootId(list[0].id));
+    void loadConversations(); // for the sidebar and the Chats button; startup itself opens Home (below)
   }, [loadConversations]);
 
   useEffect(() => {
@@ -169,11 +178,15 @@ export default function Flow() {
 
   // ---------- navigation ----------
 
-  const loadFiles = useCallback(async () => {
+  /** Reload the vault's file list. Returns it, or null if that failed (already reported). */
+  const loadFiles = useCallback(async (): Promise<VaultEntry[] | null> => {
     try {
-      setFiles(await (await api("/api/files")).json());
+      const list: VaultEntry[] = await (await api("/api/files")).json();
+      setFiles(list);
+      return list;
     } catch (e) {
       report(e);
+      return null;
     }
   }, [report]);
 
@@ -252,6 +265,17 @@ export default function Flow() {
   }, [chatIndex]);
 
   useEffect(() => void loadChatIndex(), [loadChatIndex]);
+  // Fetch the notes editor in the background once the page is idle, so opening
+  // Home is instant without making the first load heavier.
+  useEffect(() => {
+    const prefetch = () => void import("./NoteEditor");
+    if ("requestIdleCallback" in window) {
+      const id = requestIdleCallback(prefetch, { timeout: 5000 });
+      return () => cancelIdleCallback(id);
+    }
+    const t = setTimeout(prefetch, 2000);
+    return () => clearTimeout(t);
+  }, []);
   // Re-style links when either list changes (exists / not created yet / chat deleted).
   const linksVersion = useMemo(() => ({}), [files, chatIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -301,14 +325,38 @@ export default function Flow() {
 
   const lastConversation = useRef<string | null>(null); // where "Chats" returns to from Home
 
-  const goHome = useCallback(() => {
+  /** Home opens its own note, Home.md at the top of the vault. If it isn't there, it's created with a welcome guide. */
+  const goHome = useCallback(async () => {
     lastConversation.current = rootId;
     setHome(true);
     setRootId(null); // clears the tree, map and side panel
     setQuery("");
-    void loadFiles();
     void loadChatIndex();
-  }, [rootId, loadFiles, loadChatIndex]);
+    await editor.current?.flush(); // if a note is open, save it before switching
+    const path = `${HOME_NOTE}.md`;
+    const list = await loadFiles();
+    if (!list) return; // couldn't reach the server (already reported)
+    if (!list.some((e) => e.type === "file" && e.path === path)) {
+      // No Home note yet: create it, starting with the guide to Flow.
+      try {
+        await api("/api/files", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parent: "", name: HOME_NOTE, type: "file" }) });
+        await api("/api/files/content", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, content: HOME_WELCOME }) });
+      } catch (e) {
+        return report(e);
+      }
+      await loadFiles();
+    }
+    setNoteHistory([]);
+    setOpenNote(path);
+  }, [rootId, loadFiles, loadChatIndex, report]);
+
+  // The app starts on Home. (Once: goHome changes whenever the open chat does.)
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void goHome();
+  }, [goHome]);
 
   /** Leave Home: back to the last conversation, else the most recent one. */
   const goToChats = useCallback(() => {
@@ -799,6 +847,20 @@ export default function Flow() {
 
   const nested = !!focusThread?.parentThreadId;
 
+  // The Home note is reached with the Home button, not listed with the other files;
+  // the button is highlighted only while that note is open.
+  const homePath = `${HOME_NOTE}.md`;
+  const onHomeNote = home && openNote === homePath;
+  const sidebarFiles = useMemo(() => files?.filter((e) => e.path !== homePath) ?? null, [files, homePath]);
+
+  // Map props that stay the same object until they really change, so the
+  // memoized map skips the many re-renders while a reply streams.
+  const mapThreads = useMemo(() => tree.threads.filter((t) => t.kind !== "oneoff"), [tree.threads]);
+  const streamingKey = Object.keys(streaming).sort().join(","); // which threads stream, not their text
+  const streamingIds = useMemo(() => new Set(streamingKey ? streamingKey.split(",") : []), [streamingKey]);
+  const onMapNavigate = useCallback((id: string) => goTo(id, null, false), [goTo]);
+  const onMapExit = useCallback(() => mainInput.current?.focus(), []);
+
   // ---------- render ----------
 
   return (
@@ -808,6 +870,9 @@ export default function Flow() {
         // Clicking anywhere on the sidebar except its own buttons (conversation
         // list, + New) enters map mode, so WASD works without aiming at a dot.
         onMouseDown={(e) => {
+          // On Home there's no map: leave clicks alone (otherwise preventDefault
+          // below would keep focus stuck in a file's rename box).
+          if (home || !mapRef.current) return;
           const target = e.target as Element;
           const control = target.closest("button, a, input, textarea");
           if (control && !mapRef.current?.contains(control)) return;
@@ -844,13 +909,13 @@ export default function Flow() {
               }}
               placeholder={home ? "Search files" : "Search"}
               aria-label={home ? "Search files" : "Search chats"}
-              className="w-full rounded-md border border-line bg-bg py-1 pr-2 pl-8 text-sm outline-none placeholder:text-muted focus:border-stone-400"
+              className="w-full rounded-md border border-line bg-bg py-1 pr-2 pl-8 text-sm outline-none placeholder:text-muted focus:border-line-strong"
             />
           </div>
           <button
             onClick={goHome}
             className={`mt-2 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm ${
-              home ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"
+              onHomeNote ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"
             }`}
           >
             <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
@@ -879,9 +944,9 @@ export default function Flow() {
           )}
         </div>
         {home ? (
-          files && (
+          sidebarFiles && (
             <FileTree
-              entries={files}
+              entries={sidebarFiles}
               activePath={openNote}
               filter={query}
               onOpen={openFromSidebar}
@@ -899,7 +964,7 @@ export default function Flow() {
             <button
               key={c.id}
               onClick={() => openConversation(c.id)}
-              className={`block w-full truncate rounded-md px-3 py-2 text-left text-sm ${
+              className={`block w-full truncate rounded-md px-3 py-1.5 text-left text-[13px] leading-5 ${
                 c.id === rootId ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"
               }`}
             >
@@ -912,14 +977,14 @@ export default function Flow() {
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
               <ThreadMap
                 ref={mapRef}
-                threads={tree.threads.filter((t) => t.kind !== "oneoff")}
+                threads={mapThreads}
                 rootId={rootId}
                 focusId={focus}
                 sideId={showSide ? sideId : null}
                 counts={counts}
-                streaming={new Set(Object.keys(streaming))}
-                onNavigate={(id) => goTo(id, null, false)}
-                onExit={() => mainInput.current?.focus()}
+                streaming={streamingIds}
+                onNavigate={onMapNavigate}
+                onExit={onMapExit}
               />
             </div>
           </div>
@@ -967,7 +1032,7 @@ export default function Flow() {
         <>
       {/* Center: the focused thread */}
       <main className="relative flex min-w-0 flex-1 flex-col">
-        {focus && (
+        {focus && focusMessages.length > 0 && (
           <button
             onClick={() => makeNote(focus)}
             disabled={!!makingNote}
@@ -1025,7 +1090,7 @@ export default function Flow() {
                 onOpen={openThread}
               />
             )}
-            {focus && streaming[focus] !== undefined && <Bubble message={{ role: "assistant", content: streaming[focus] || "…" }} />}
+            {focus && streaming[focus] !== undefined && <StreamingBubble content={streaming[focus]} />}
           </div>
         </div>
         <Composer
@@ -1120,7 +1185,7 @@ export default function Flow() {
                   canBranch={!activeIsOneOff}
                   compact
                 />
-                {streaming[activeSide.id] !== undefined && <Bubble message={{ role: "assistant", content: streaming[activeSide.id] || "…" }} compact />}
+                {streaming[activeSide.id] !== undefined && <StreamingBubble content={streaming[activeSide.id]} compact />}
               </div>
               <Composer
                 ref={sideInput}
@@ -1146,7 +1211,7 @@ export default function Flow() {
           role="alert"
           className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-line bg-bg px-4 py-2.5 text-sm shadow-lg"
         >
-          <span className="size-2 shrink-0 rounded-full bg-red-500" />
+          <span className="size-2 shrink-0 rounded-full bg-danger" />
           {error}
           <button onClick={() => setError(null)} className="text-muted hover:text-fg" title="Dismiss">
             ✕
@@ -1161,7 +1226,7 @@ export default function Flow() {
           style={{ left: selection.x, top: selection.y - 40 }}
           className="fixed z-50 flex -translate-x-1/2 overflow-hidden rounded-md bg-fg text-xs font-medium text-bg shadow-lg"
         >
-          <button onClick={() => fork(selection.threadId, selection.messageId, selection.text)} className="px-3 py-1.5 hover:bg-white/10">
+          <button onClick={() => fork(selection.threadId, selection.messageId, selection.text)} className="px-3 py-1.5 hover:bg-bg/15">
             Ask on the side <span className="opacity-60">{MOD}K</span>
           </button>
         </div>
@@ -1241,6 +1306,8 @@ type BubbleProps = {
   forkable?: boolean;
   compact?: boolean;
   anchors?: Anchor[];
+  /** A reply still streaming in: where each chunk starts, so new text fades in. */
+  fade?: { starts: number[]; source: string };
 };
 
 /**
@@ -1256,8 +1323,24 @@ const Bubble = memo(BubbleView, (a, b) =>
   a.threadId === b.threadId &&
   a.forkable === b.forkable &&
   a.compact === b.compact &&
+  a.fade?.starts.length === b.fade?.starts.length &&
   sameAnchors(a.anchors, b.anchors),
 );
+
+/**
+ * The reply being streamed. Remembers where each arrival of text began, so
+ * each one fades in as it appears instead of popping in. Unmounts when the
+ * reply finishes, and the saved message renders plainly in its place.
+ */
+function StreamingBubble({ content, compact }: { content: string; compact?: boolean }) {
+  const [track] = useState(() => ({ length: 0, starts: [] as number[] }));
+  if (content.length > track.length) {
+    track.starts.push(track.length);
+    track.length = content.length;
+  }
+  if (!content) return <Bubble message={{ role: "assistant", content: "…" }} compact={compact} />;
+  return <Bubble message={{ role: "assistant", content }} compact={compact} fade={{ starts: [...track.starts], source: content }} />;
+}
 
 function sameAnchors(a: Anchor[] = [], b: Anchor[] = []) {
   return (
@@ -1266,7 +1349,7 @@ function sameAnchors(a: Anchor[] = [], b: Anchor[] = []) {
   );
 }
 
-function BubbleView({ message, threadId, forkable, compact, anchors }: BubbleProps) {
+function BubbleView({ message, threadId, forkable, compact, anchors, fade }: BubbleProps) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -1280,7 +1363,10 @@ function BubbleView({ message, threadId, forkable, compact, anchors }: BubblePro
       data-fork-thread={forkable ? threadId : undefined}
       className={`md px-1 ${compact ? "text-sm" : ""}`}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={anchors?.length ? [[rehypeAnchors, { anchors }]] : []}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[...(anchors?.length ? [[rehypeAnchors, { anchors }] satisfies Pluggable] : []), ...(fade ? [[rehypeFade, fade] satisfies Pluggable] : [])]}
+      >
         {message.content}
       </ReactMarkdown>
     </div>
@@ -1334,7 +1420,7 @@ function Composer({
             setValue("");
           }
         }}
-        className="w-full resize-none rounded-xl border border-line bg-bg px-4 py-3 outline-none placeholder:text-muted focus:border-stone-400"
+        className="w-full resize-none rounded-xl border border-line bg-bg px-4 py-3 outline-none placeholder:text-muted focus:border-line-strong"
       />
     </div>
   );

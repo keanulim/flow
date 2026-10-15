@@ -2,10 +2,11 @@
 
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { liveMarkdown } from "@/lib/live-markdown";
 import { withTrailingLine } from "@/lib/toggles";
 import { type LinkHost, pageName, refreshLinks } from "@/lib/wikilinks";
+import ContextMenu from "./ContextMenu";
 
 const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
@@ -31,8 +32,8 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
   const view = useRef<EditorView | null>(null);
   const callbacks = useRef({ onChange, onBlur, links });
   callbacks.current = { onChange, onBlur, links };
-  // "Link to page" button over a one-line selection (like "Ask on the side" in chats)
-  const [linkButton, setLinkButton] = useState<{ x: number; y: number } | null>(null);
+  // Right-click on selected text (one line): a menu with "Link to page".
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const v = new EditorView({
@@ -44,14 +45,21 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
           ...(live !== undefined ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) callbacks.current.onChange(u.state.doc.toString());
-            if (u.selectionSet || u.docChanged || u.focusChanged) {
-              const sel = u.state.selection.main;
-              const text = u.state.sliceDoc(sel.from, sel.to);
-              const coords = !sel.empty && u.view.hasFocus && !text.includes("\n") && pageName(text) ? u.view.coordsAtPos(sel.from) : null;
-              setLinkButton(coords ? { x: coords.left, y: coords.top } : null);
-            }
           }),
-          EditorView.domEventHandlers({ blur: () => callbacks.current.onBlur() }),
+          EditorView.domEventHandlers({
+            blur: () => callbacks.current.onBlur(),
+            contextmenu: (e, view) => {
+              if (live !== undefined) return false;
+              const sel = view.state.selection.main;
+              const text = view.state.sliceDoc(sel.from, sel.to);
+              const at = view.posAtCoords({ x: e.clientX, y: e.clientY });
+              // Only on the selected text itself; anywhere else, the browser's own menu.
+              if (sel.empty || text.includes("\n") || !pageName(text) || at === null || at < sel.from || at > sel.to) return false;
+              e.preventDefault();
+              setMenu({ x: e.clientX, y: e.clientY });
+              return true;
+            },
+          }),
         ],
       }),
     });
@@ -81,11 +89,14 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
     view.current?.dispatch({ effects: refreshLinks.of(null) });
   }, [linksVersion]);
 
+  const closeMenu = useCallback(() => setMenu(null), []);
+
   useImperativeHandle(ref, () => ({ focus: () => view.current?.focus() }), []);
 
   const linkSelection = () => {
     const v = view.current;
     if (!v) return;
+    v.focus(); // clicking the menu took focus; the selection is still there
     // Same as pressing ⌘K in the editor.
     v.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: isMac, ctrlKey: !isMac, bubbles: true, cancelable: true }));
   };
@@ -93,18 +104,7 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
   return (
     <>
       <div ref={host} className="h-full" />
-      {linkButton && (
-        <button
-          onMouseDown={(e) => {
-            e.preventDefault(); // keep the selection
-            linkSelection();
-          }}
-          style={{ left: linkButton.x, top: linkButton.y - 36 }}
-          className="fixed z-50 rounded-md bg-fg px-3 py-1.5 text-xs font-medium text-bg shadow-lg"
-        >
-          Link to page <span className="opacity-60">{isMac ? "⌘" : "Ctrl+"}K</span>
-        </button>
-      )}
+      {menu && <ContextMenu x={menu.x} y={menu.y} onClose={closeMenu} items={[{ label: "Link to page", run: linkSelection }]} />}
     </>
   );
 }

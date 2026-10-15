@@ -7,6 +7,7 @@
   --fg: #1c1917;
   --muted: #78716c;
   --line: #e7e5e4;
+  --line-strong: #a8a29e; /* focused inputs, outlines */
   --hover: #f0efed;
   --user: #f0efed;
   --accent: #4f46e5;
@@ -16,6 +17,48 @@
   --map-path: #a8a29e; /* lines and dots on your current path */
   --map-here: #78716c; /* the dot you're on */
   --map-node: #d6d3d1; /* dots off the path */
+  --danger: #dc2626;
+}
+
+/* Themes (Settings > Appearance). Each redefines the same tokens; everything
+   else is drawn from them. The choice is stored in localStorage and applied to
+   <html data-theme> before the page paints (see layout.tsx). */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1c1b1a;
+  --panel: #222120;
+  --fg: #e7e5e4;
+  --muted: #a8a29e;
+  --line: #34322f;
+  --line-strong: #6b6560;
+  --hover: #2d2b29;
+  --user: #2d2b29;
+  --accent: #8b8cf6;
+  --accent-soft: #34335a;
+  --chat-link: #f87171;
+  --map-path: #8a837c;
+  --map-here: #d6d3d1;
+  --map-node: #4a4643;
+  --danger: #f87171;
+}
+
+[data-theme="paper"] {
+  color-scheme: light;
+  --bg: #f5efe3;
+  --panel: #ede5d5;
+  --fg: #2e2820;
+  --muted: #7c7060;
+  --line: #e0d5c1;
+  --line-strong: #b5a68d;
+  --hover: #e8dfcc;
+  --user: #e9dfcb;
+  --accent: #5a4cc0;
+  --accent-soft: #e2dcef;
+  --chat-link: #d4483d;
+  --map-path: #a59880;
+  --map-here: #7c7060;
+  --map-node: #d8ccb5;
+  --danger: #b4321f;
 }
 
 @theme inline {
@@ -28,6 +71,8 @@
   --color-user: var(--user);
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
+  --color-line-strong: var(--line-strong);
+  --color-danger: var(--danger);
   --font-sans: var(--font-inter);
 }
 
@@ -66,4 +111,9 @@ body {
 .md mark.anchor.oneoff { background: transparent; border-bottom: 1.5px dashed color-mix(in srgb, var(--accent) 70%, transparent); border-radius: 0; }
 .md mark.anchor.oneoff:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .md mark.anchor.oneoff.active { background: color-mix(in srgb, var(--accent) 14%, transparent); border-bottom-color: var(--accent); }
+/* Streaming replies: each new piece of text fades in quickly instead of popping in */
+.stream-chunk { animation: stream-fade 180ms ease-out both; }
+@keyframes stream-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .stream-chunk { animation: none; } }
+
 ::selection { background: var(--accent-soft); }

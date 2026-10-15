@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { Thread } from "@/lib/db";
 
 const ROW = 28; // px per node row
@@ -24,7 +24,7 @@ type Props = {
  * per thread, x by nesting depth. Positions only change when threads are
  * added, so the map stays stable enough to navigate by muscle memory.
  */
-export default function ThreadMap({ threads, rootId, focusId, sideId, counts, streaming, onNavigate, onExit, ref }: Props) {
+function ThreadMap({ threads, rootId, focusId, sideId, counts, streaming, onNavigate, onExit, ref }: Props) {
   // Read the saved preference after mount: the server render has no
   // localStorage, so reading it during render would cause a hydration mismatch.
   const [collapse, setCollapse] = useState(true);
@@ -158,7 +158,7 @@ export default function ThreadMap({ threads, rootId, focusId, sideId, counts, st
             <div
               key={`h-${id}`}
               style={{ top: y - ROW / 2, height: ROW }}
-              className={`absolute inset-x-0 rounded-md ${cursor ? "bg-hover ring-1 ring-stone-300" : "bg-hover/70"}`}
+              className={`absolute inset-x-0 rounded-md ${cursor ? "bg-hover ring-1 ring-line-strong" : "bg-hover/70"}`}
             />
           );
         })}
@@ -269,3 +269,7 @@ function layout(threads: Thread[], rootId: string): Node[] {
   visit(root, 0);
   return out;
 }
+
+// Memoized: Flow re-renders many times a second while a reply streams, but the
+// map only changes when its props do (Flow keeps them stable).
+export default memo(ThreadMap);

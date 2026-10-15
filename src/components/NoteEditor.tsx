@@ -136,7 +136,7 @@ export default function NoteEditor({ path, onError, links, linksVersion, back, l
               Writing from chat…
             </span>
           ) : (
-            <span className={status === "error" ? "text-red-600" : ""}>
+            <span className={status === "error" ? "text-danger" : ""}>
               {{ saved: "Saved", unsaved: "Edited", saving: "Saving…", error: "Not saved" }[status]}
             </span>
           )}

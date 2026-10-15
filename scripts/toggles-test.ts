@@ -2,6 +2,7 @@
 // housekeeping. Run: npm run test:toggles
 
 import { EditorState, Text } from "@codemirror/state";
+import { HOME_WELCOME } from "../src/lib/home-note";
 import { missingBlankLines, parseToggles, toggles, withTrailingLine } from "../src/lib/toggles";
 let fails = 0;
 const check = (label: string, ok: boolean, detail = "") => { console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? "  " + detail : ""}`); if (!ok) fails++; };
@@ -52,6 +53,12 @@ check("cursor at the end of a title line is clamped into the title", clamped ===
 // --- Backspace out and back in (needs a view, so only the structure is checked here; the browser test covers keys) ---
 const outDoc = "<details open>\n<summary>T</summary>\n\nlast text\n\n</details>\n\nafter";
 check("an empty last body line is the toggle's last line", (() => { const p = parseToggles(Text.of(outDoc.split("\n"))); const t = p.toggles[0]; return t.bodyLast === 5 && p.lines.get(5)?.role === "body"; })());
+
+// --- the Home page guide is well-formed (it's written into new Home notes) ---
+const home = Text.of(HOME_WELCOME.split("\n"));
+const homeToggles = parseToggles(home).toggles;
+check("Home guide: two closed toggles, each closed off with its blank line", homeToggles.length === 2 && homeToggles.every((t) => !t.open && t.closeLine !== null && t.spacerLine !== null), JSON.stringify(homeToggles.map((t) => home.sliceString(t.titleFrom, t.titleTo))));
+check("Home guide: no blank lines missing (the editor won't rewrite it on open)", missingBlankLines(home).length === 0);
 
 console.log(fails ? `\n${fails} FAILED` : "\nall passed");
 if (fails) process.exit(1);
