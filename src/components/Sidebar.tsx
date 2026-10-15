@@ -1,0 +1,164 @@
+"use client";
+
+import type { ReactNode, RefObject } from "react";
+import type { Thread } from "@/lib/db";
+import type { VaultEntry } from "@/lib/vault";
+import FileTree from "./FileTree";
+import RenameInput from "./RenameInput";
+
+const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+const MOD = isMac ? "⌘" : "Ctrl";
+
+type Props = {
+  home: boolean;
+  query: string;
+  onQuery: (q: string) => void;
+  onHome: () => void;
+  /** Home is highlighted only while the Home note is open. */
+  homeActive: boolean;
+  onChats: () => void;
+  onNewChat: () => void;
+  onSettings: () => void;
+  /** On Home: the vault's files and what to do with them. */
+  files: VaultEntry[] | null;
+  activeNote: string | null;
+  fileActions: Pick<React.ComponentProps<typeof FileTree>, "onOpen" | "onCreate" | "onRename" | "onMove" | "onDelete">;
+  /** In chats: the conversation list (already filtered by search) and the map below it. */
+  conversations: Thread[];
+  searching: boolean;
+  activeChat: string | null;
+  onOpenChat: (id: string) => void;
+  onChatMenu: (id: string, x: number, y: number) => void;
+  /** The chat whose name is being edited (from its right-click menu), and what to do with the new name. */
+  renamingChat: string | null;
+  onRenameChat: (id: string, name: string | null) => void;
+  map: ReactNode;
+  mapRef: RefObject<HTMLDivElement | null>;
+};
+
+/** The left sidebar: search, Home / Chats, then either the notes (on Home) or the chat list and map. */
+export default function Sidebar(p: Props) {
+  return (
+    <aside
+      // In chats, clicking anywhere on the sidebar except its own buttons
+      // enters map mode, so WASD works without aiming at a dot.
+      onMouseDown={(e) => {
+        // On Home there's no map: leave clicks alone (otherwise preventDefault
+        // below would keep focus stuck in a file's rename box).
+        if (p.home || !p.mapRef.current) return;
+        const control = (e.target as Element).closest("button, a, input, textarea");
+        if (control && !p.mapRef.current.contains(control)) return;
+        e.preventDefault(); // no text selection, no focus flicker
+        p.mapRef.current.focus();
+      }}
+      className="flex w-64 shrink-0 flex-col border-r border-line bg-panel"
+    >
+      <div className="px-3 pt-3 pb-1">
+        <div className="relative">
+          <svg
+            className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+          >
+            <circle cx="7" cy="7" r="4.5" />
+            <path d="M10.5 10.5 14 14" />
+          </svg>
+          <input
+            value={p.query}
+            onChange={(e) => p.onQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                // Clear first, then leave the box. Don't let the app-wide Esc react.
+                e.stopPropagation();
+                if (p.query) p.onQuery("");
+                else e.currentTarget.blur();
+              } else if (e.key === "Enter" && !p.home && p.conversations[0]) {
+                p.onOpenChat(p.conversations[0].id);
+              }
+            }}
+            placeholder={p.home ? "Search files" : "Search"}
+            aria-label={p.home ? "Search files" : "Search chats"}
+            className="w-full rounded-md border border-line bg-bg py-1 pr-2 pl-8 text-sm outline-none placeholder:text-muted focus:border-line-strong"
+          />
+        </div>
+        <button
+          onClick={p.onHome}
+          className={`mt-2 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm ${
+            p.homeActive ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"
+          }`}
+        >
+          <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+            <path d="M2.5 7 8 2.5 13.5 7v6a.5.5 0 0 1-.5.5H9.5v-4h-3v4H3a.5.5 0 0 1-.5-.5V7Z" />
+          </svg>
+          Home
+        </button>
+        {p.home ? (
+          <button onClick={p.onChats} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg">
+            <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+              <path d="M2.5 4a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 13.5 4v5.5A1.5 1.5 0 0 1 12 11H7l-3 2.5V11H4a1.5 1.5 0 0 1-1.5-1.5V4Z" />
+            </svg>
+            Chats
+          </button>
+        ) : (
+          <button onClick={p.onNewChat} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg">
+            <span className="w-3.5 text-center text-base leading-none">+</span>
+            New chat
+          </button>
+        )}
+      </div>
+
+      {p.home ? (
+        p.files && <FileTree entries={p.files} activePath={p.activeNote} filter={p.query} {...p.fileActions} />
+      ) : (
+        <>
+          <nav className="max-h-[35%] shrink-0 overflow-y-auto px-2 pb-3">
+            {p.searching && p.conversations.length === 0 && <p className="px-3 py-2 text-sm text-muted">No chats match “{p.query.trim()}”</p>}
+            {p.conversations.map((c) =>
+              c.id === p.renamingChat ? (
+                <div key={c.id} className="flex px-2 py-1">
+                  <RenameInput initial={c.title} onDone={(name) => p.onRenameChat(c.id, name)} className="px-1.5 py-0.5 leading-5" />
+                </div>
+              ) : (
+                <button
+                  key={c.id}
+                  onClick={() => p.onOpenChat(c.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    p.onChatMenu(c.id, e.clientX, e.clientY);
+                  }}
+                  className={`block w-full truncate rounded-md px-3 py-1.5 text-left text-[13px] leading-5 ${
+                    c.id === p.activeChat ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"
+                  }`}
+                >
+                  {c.title}
+                </button>
+              ),
+            )}
+          </nav>
+          {p.map && (
+            <div className="flex min-h-0 flex-1 flex-col border-t border-line">
+              <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">{p.map}</div>
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="mt-auto border-t border-line px-3 py-2">
+        <button
+          onClick={p.onSettings}
+          className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg"
+          title={`Settings (${MOD},)`}
+        >
+          <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="8" cy="8" r="2" />
+            <path d="M8 1.5v1.75M8 12.75v1.75M1.5 8h1.75M12.75 8h1.75M3.4 3.4l1.24 1.24M11.36 11.36l1.24 1.24M3.4 12.6l1.24-1.24M11.36 4.64l1.24-1.24" />
+          </svg>
+          Settings
+        </button>
+      </div>
+    </aside>
+  );
+}

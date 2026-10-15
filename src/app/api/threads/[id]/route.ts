@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { deleteThread, getConversation, getThread, saveToMap } from "@/lib/db";
+import { deleteThread, getConversation, getThread, saveToMap, setTitle } from "@/lib/db";
 
 /** A conversation's full tree: main thread, side threads, and all messages. */
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -8,12 +8,20 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   return NextResponse.json(getConversation(id));
 }
 
-/** Save a one-off to the map: { kind: "thread" }. */
+/** Save a one-off to the map: { kind: "thread" }. Rename: { title }. */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { kind } = (await req.json()) as { kind?: string };
-  if (!getThread(id) || kind !== "thread") return NextResponse.json({ error: "bad request" }, { status: 400 });
-  saveToMap(id);
+  const { kind, title } = (await req.json()) as { kind?: string; title?: string };
+  if (!getThread(id)) return NextResponse.json({ error: "Chat not found" }, { status: 404 });
+  if (typeof title === "string") {
+    const name = title.replace(/\s+/g, " ").trim().slice(0, 120);
+    if (!name) return NextResponse.json({ error: "A chat needs a name" }, { status: 400 });
+    setTitle(id, name);
+  } else if (kind === "thread") {
+    saveToMap(id);
+  } else {
+    return NextResponse.json({ error: "bad request" }, { status: 400 });
+  }
   return NextResponse.json(getThread(id));
 }
 

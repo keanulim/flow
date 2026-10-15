@@ -15,6 +15,7 @@ const SHORTCUTS: { section: string; items: [keys: string, label: string][] }[] =
       ["⇧Esc", "Back to the main thread"],
       ["⌥↑  ⌥↓", "Switch side threads"],
       [`${MOD}\\`, "Show or hide the side panel"],
+      ["Right-click a chat", "Rename it, or delete it with all its branches and side questions"],
     ],
   },
   {
@@ -38,7 +39,7 @@ const SHORTCUTS: { section: string; items: [keys: string, label: string][] }[] =
       ["Tab  ⇧Tab", "Move the line after a toggle into it / a line inside out"],
       ["⌫ on an empty last line", "Step out of the toggle (⌫ again goes back in)"],
       ["Drag", "Move a note or folder into a folder"],
-      ["Double-click", "Rename"],
+      ["Right-click", "Rename, delete, or add a note or folder"],
     ],
   },
   {

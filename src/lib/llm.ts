@@ -2,6 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { BuiltContext } from "./context";
 
 export const MODEL = "claude-sonnet-5-5";
+/** For small, quick jobs like naming a chat. */
+export const FAST_MODEL = "claude-haiku-5-5";
 
 // Frozen on purpose: the system prompt is the first thing in the cached
 // prefix, so any change to it (timestamps, per-request ids) would invalidate
@@ -158,4 +160,15 @@ function mockSummary(prompt: string): string {
   }
   const notes = `_(Mock summary: set \`ANTHROPIC_API_KEY\` for a real one.)_\n\n${lines.join("\n") || "- (empty chat)"}`;
   return /Start your reply with one line "Title: \.\.\."/.test(prompt) ? `Title: Mock title\n\n${notes}` : notes;
+}
+
+/** A short, whole reply from the fast model, for small jobs like naming a chat. */
+export async function quickText({ system, prompt, maxTokens, mock }: Omit<CompleteOptions, "signal">): Promise<string> {
+  if (!process.env.ANTHROPIC_API_KEY || mock) {
+    const first = /^User: (.+)$/m.exec(prompt)?.[1] ?? "chat";
+    return `Mock: ${first.split(/\s+/).slice(0, 4).join(" ")}`;
+  }
+  client ??= new Anthropic();
+  const msg = await client.messages.create({ model: FAST_MODEL, max_tokens: maxTokens, system, messages: [{ role: "user", content: prompt }] });
+  return msg.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("").trim();
 }

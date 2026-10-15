@@ -67,6 +67,8 @@ function open(): Database.Database {
 function migrate(db: Database.Database) {
   const cols = new Set((db.prepare(`PRAGMA table_info(threads)`).all() as { name: string }[]).map((c) => c.name));
   if (!cols.has("kind")) db.exec(`ALTER TABLE threads ADD COLUMN kind TEXT NOT NULL DEFAULT 'thread'`);
+  // 1 once a thread's title has been written by the model (from what it's about).
+  if (!cols.has("auto_titled")) db.exec(`ALTER TABLE threads ADD COLUMN auto_titled INTEGER NOT NULL DEFAULT 0`);
 }
 
 export const db = (g.flowDb ??= open());
@@ -189,6 +191,35 @@ export function createThread(input: {
 
 export function renameThread(id: string, title: string) {
   db.prepare(`UPDATE threads SET title = ? WHERE id = ?`).run(title, id);
+}
+
+/** Whether a thread still has its placeholder title (a main chat's first message, a branch's highlighted text). */
+export function needsTitle(id: string): boolean {
+  const row = db.prepare(`SELECT auto_titled AS titled FROM threads WHERE id = ?`).get(id) as { titled: number } | undefined;
+  return row?.titled === 0;
+}
+
+/** A name the user chose. Marked as titled, so automatic titles never replace it. */
+export function setTitle(id: string, title: string) {
+  db.prepare(`UPDATE threads SET title = ?, auto_titled = 1 WHERE id = ?`).run(title, id);
+}
+
+/** Save a model-written title for a thread. */
+export function setAutoTitle(id: string, title: string) {
+  db.prepare(`UPDATE threads SET title = ?, auto_titled = 1 WHERE id = ?`).run(title, id);
+}
+
+/** Threads (chats and branches) that still have a placeholder title and at least one reply to summarize. */
+export function untitledThreads(): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT t.id FROM threads t
+         WHERE t.auto_titled = 0
+           AND EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.role = 'assistant')`,
+      )
+      .all() as { id: string }[]
+  ).map((r) => r.id);
 }
 
 /** Promote a one-off to a regular side thread. One-way: anything in the map stays in the map. */

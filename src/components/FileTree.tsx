@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { VaultEntry } from "@/lib/vault";
 import ContextMenu from "./ContextMenu";
+import RenameInput from "./RenameInput";
 
 type Props = {
   entries: VaultEntry[];
@@ -23,7 +24,7 @@ const label = (e: VaultEntry) => (e.type === "file" ? e.name.replace(/\.md$/i, "
  * The vault as a folder tree, Obsidian style: click to open, drag onto a folder
  * (or the empty area for the top level) to move. Right-click for rename and
  * delete (to the vault's .trash), and on folders or the empty area, new note /
- * new folder. Double-click also renames. Clicking a folder selects it as the
+ * new folder. Clicking a folder selects it as the
  * place new notes and folders go; each folder also has its own "+".
  */
 export default function FileTree({ entries, activePath, filter, onOpen, onCreate, onRename, onMove, onDelete }: Props) {
@@ -175,7 +176,6 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
               onOpen(e.path);
             }
           }}
-          onDoubleClick={() => setRenaming(e.path)}
           onContextMenu={(ev) => {
             ev.preventDefault();
             ev.stopPropagation();
@@ -193,7 +193,7 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
           <span className="flex w-4 shrink-0 justify-center text-muted">
             {isFolder && (
               <svg
-                className={`size-3.5 ${open ? "rotate-90" : ""}`}
+                className={`size-3 ${open ? "rotate-90" : ""}`}
                 viewBox="0 0 16 16"
                 fill="none"
                 stroke="currentColor"
@@ -315,37 +315,6 @@ function DragGhost({ name, x, y }: { name: string; x: number; y: number }) {
     >
       {name}
     </div>
-  );
-}
-
-function RenameInput({ initial, onDone }: { initial: string; onDone: (name: string | null) => void }) {
-  const [value, setValue] = useState(initial);
-  const done = useRef(false);
-  const input = useRef<HTMLInputElement>(null);
-  // Focus and select the whole name on mount, so typing replaces it.
-  useEffect(() => {
-    input.current?.focus();
-    input.current?.select();
-  }, []);
-  const finish = (name: string | null) => {
-    if (done.current) return; // Enter then blur would otherwise submit twice
-    done.current = true;
-    onDone(name);
-  };
-  return (
-    <input
-      ref={input}
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        e.stopPropagation(); // keep app-wide shortcuts (Esc) out of it
-        if (e.key === "Enter") finish(value.trim());
-        if (e.key === "Escape") finish(null);
-      }}
-      onBlur={() => finish(value.trim())}
-      className="min-w-0 flex-1 rounded border border-line-strong bg-bg px-1 py-0 text-[13px] text-fg outline-none"
-    />
   );
 }
 

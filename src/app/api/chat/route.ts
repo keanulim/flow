@@ -2,6 +2,7 @@ import { buildContext } from "@/lib/context";
 import { addMessage, getMessages, getThread, renameThread } from "@/lib/db";
 import { streamReply } from "@/lib/llm";
 import { STOPPED_NOTE } from "@/lib/shared";
+import { autoTitle } from "@/lib/titles";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -78,6 +79,13 @@ export async function POST(req: Request) {
         // Persist what we got, so every user turn is followed by an assistant
         // turn, and mark a stopped reply so the model knows it was cut off.
         addMessage(threadId, "assistant", (reply || "") + (stopped ? STOPPED_NOTE : "") || "_(empty reply)_", assistantId);
+        // A thread's first reply: replace its placeholder title with one about
+        // what it's about. Done before closing, so the client's refresh right
+        // after picks it up. Capped, so a slow call can't hold the reply open;
+        // on failure the placeholder stays and the next reply tries again.
+        if (!stopped) {
+          await Promise.race([autoTitle(threadId, { mock: !!mock }), new Promise((r) => setTimeout(r, 4000))]).catch((e) => console.error("[chat] title failed", e));
+        }
         try {
           controller.close();
         } catch {} // already closed if the client went away

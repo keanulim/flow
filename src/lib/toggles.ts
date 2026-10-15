@@ -143,7 +143,7 @@ class Arrow extends WidgetType {
     const el = document.createElement("span");
     el.className = "cm-toggle-arrow";
     el.setAttribute("aria-label", this.open ? "Collapse" : "Expand");
-    el.innerHTML = `<svg viewBox="0 0 16 16" width="14" height="14" style="transform: rotate(${this.open ? 90 : 0}deg)"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    el.innerHTML = `<svg viewBox="0 0 16 16" width="14" height="14" style="transform: rotate(${this.open ? 90 : 0}deg)"><path d="M5.5 3.8 11.5 8 5.5 12.2Z" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg>`;
     el.addEventListener("mousedown", (e) => {
       e.preventDefault(); // keep the cursor where it is
       const n = view.state.doc.lineAt(view.posAtDOM(el)).number;
