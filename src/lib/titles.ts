@@ -12,10 +12,13 @@ Sentence case, no quotes, no final punctuation, no "Chat about" or similar fille
 
 const MAX_CHARS = 1500; // per message: the start of a chat says what it's about
 
-export function titlePrompt(messages: { role: string; content: string }[], anchor?: string | null): string {
+export function titlePrompt(messages: { role: string; content: string; attachments?: { name: string }[] }[], anchor?: string | null): string {
   const transcript = messages
     .slice(0, 6)
-    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content.slice(0, MAX_CHARS)}`)
+    .map((m) => {
+      const files = m.attachments?.length ? `[attached: ${m.attachments.map((a) => a.name).join(", ")}] ` : ""; // the model reads the files; the title writer sees their names
+      return `${m.role === "user" ? "User" : "Assistant"}: ${files}${m.content.slice(0, MAX_CHARS)}`;
+    })
     .join("\n\n");
   // A branch: name what it explored about the excerpt, not the excerpt itself.
   const context =

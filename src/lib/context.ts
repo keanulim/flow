@@ -1,5 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Message, Thread } from "./db";
+import type { Attachment } from "./shared";
 
 /**
  * The core idea of Flow: a conversation is a tree, and every thread decides
@@ -25,6 +26,8 @@ export type BuiltContext = {
    *  up to here is byte-identical to the parent's history, so it's the spot
    *  where a prompt-cache breakpoint lets side threads reuse the main prefix. */
   inheritedUntil: number;
+  /** Files attached to each message (same order as `messages`), for the caller to read in; see attachFiles. */
+  files: (Attachment[] | undefined)[];
 };
 
 export function buildContext(threadId: string, load: ContextLoader): BuiltContext {
@@ -33,10 +36,11 @@ export function buildContext(threadId: string, load: ContextLoader): BuiltContex
   return {
     messages: lineage.map((m) => ({ role: m.role, content: m.content })),
     inheritedUntil,
+    files: lineage.map((m) => m.attachments),
   };
 }
 
-type Entry = { role: Message["role"]; content: string; id: string; inherited: boolean };
+type Entry = { role: Message["role"]; content: string; id: string; inherited: boolean; attachments?: Attachment[] };
 
 function collect(threadId: string, load: ContextLoader): Entry[] {
   const thread = load.getThread(threadId);
@@ -44,7 +48,7 @@ function collect(threadId: string, load: ContextLoader): Entry[] {
 
   const own: Entry[] = load
     .getMessages(threadId)
-    .map((m) => ({ role: m.role, content: m.content, id: m.id, inherited: false }));
+    .map((m) => ({ role: m.role, content: m.content, id: m.id, inherited: false, attachments: m.attachments }));
 
   if (!thread.parentThreadId) return own;
 

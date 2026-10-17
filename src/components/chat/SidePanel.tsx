@@ -2,6 +2,7 @@
 
 import type { RefObject } from "react";
 import type { Conversation } from "@/hooks/useConversation";
+import type { Attachment } from "@/lib/shared";
 import { Composer, MessageList, StreamingBubble } from "./Messages";
 
 const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
@@ -10,8 +11,11 @@ const MOD = isMac ? "⌘" : "Ctrl";
 type Props = {
   conv: Conversation;
   streaming: Record<string, string>;
-  send: (threadId: string | null, text: string) => void;
+  /** What the model is doing in a thread when it isn't writing ("Searching: …"). */
+  activity: Record<string, string>;
+  send: (threadId: string | null, text: string, attachments?: Attachment[]) => void;
   stop: (threadId: string) => void;
+  retry: (threadId: string, messageId: string) => void;
   onJumpToSource: (messageId: string) => void;
   /** Text selection (for "ask on the side") and clicks on highlights. */
   onMouseUp: () => void;
@@ -20,7 +24,7 @@ type Props = {
 };
 
 /** The side panel: the focused thread's side threads, and the open one with its own message box. */
-export default function SidePanel({ conv, streaming, send, stop, onJumpToSource, onMouseUp, onClick, inputRef }: Props) {
+export default function SidePanel({ conv, streaming, activity, send, stop, retry, onJumpToSource, onMouseUp, onClick, inputRef }: Props) {
   const { sideThreads, sideId, activeSide, activeIsOneOff, childrenOf, messagesOf, counts, setSideOpen, openThread, deleteThread, saveToMap, goTo, fork } = conv;
 
   return (
@@ -105,17 +109,19 @@ export default function SidePanel({ conv, streaming, send, stop, onJumpToSource,
               flashId={null}
               onFork={(messageId) => fork(activeSide.id, messageId, null)}
               onOpen={openThread}
+              onRetry={streaming[activeSide.id] === undefined ? (messageId) => conv.confirmRetry(messageId) && retry(activeSide.id, messageId) : undefined}
               canBranch={!activeIsOneOff}
               compact
             />
-            {streaming[activeSide.id] !== undefined && <StreamingBubble content={streaming[activeSide.id]} compact />}
+            {streaming[activeSide.id] !== undefined && <StreamingBubble content={streaming[activeSide.id]} activity={activity[activeSide.id]} compact />}
           </div>
           <Composer
             ref={inputRef}
             onStop={() => stop(activeSide.id)}
             busy={streaming[activeSide.id] !== undefined}
             placeholder={activeIsOneOff ? "Follow up…  (Esc to return)" : "Ask on the side…  (Esc to return)"}
-            onSend={(text) => send(activeSide.id, text)}
+            onSend={(text, files) => send(activeSide.id, text, files)}
+            attachments
             compact
           />
         </>

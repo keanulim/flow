@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/client";
+import { listNotes, listOtherFiles, resolveFile, resolveNote } from "@/lib/notes";
 import type { VaultEntry } from "@/lib/vault";
 import type { NoteEditorHandle } from "@/components/NoteEditor";
-
-export type NoteInfo = { path: string; name: string; folder: string };
 
 const folderOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
 
@@ -34,29 +33,52 @@ export function useVault(report: (e: unknown) => void) {
     }
   }, [report]);
 
-  const noteList = useMemo(() => {
-    const out: NoteInfo[] = [];
-    const walk = (list: VaultEntry[]) =>
-      list.forEach((e) => {
-        if (e.type === "folder") walk(e.children);
-        else out.push({ path: e.path, name: e.name.replace(/\.md$/i, ""), folder: folderOf(e.path) });
-      });
-    walk(files ?? []);
-    return out;
+  // Resolved once a new file list has been rendered (see addImage).
+  const listRendered = useRef<(() => void)[]>([]);
+  useEffect(() => {
+    const waiting = listRendered.current;
+    listRendered.current = [];
+    waiting.forEach((resolve) => resolve());
   }, [files]);
 
-  /** Which note a link points to: an exact "folder/name", else a same-named note, preferring the current folder. */
-  const resolveLink = useCallback(
-    (target: string, from: string | null): string | null => {
-      const t = target.replace(/\.md$/i, "").toLowerCase();
-      if (t.includes("/")) return noteList.find((n) => n.path.toLowerCase() === `${t}.md`)?.path ?? null;
-      const matches = noteList.filter((n) => n.name.toLowerCase() === t);
-      if (!matches.length) return null;
-      const here = from ? folderOf(from) : "";
-      return (matches.find((n) => n.folder === here) ?? [...matches].sort((a, b) => a.path.length - b.path.length)[0]).path;
+  const noteList = useMemo(() => listNotes(files ?? []), [files]);
+  const otherFiles = useMemo(() => listOtherFiles(files ?? []), [files]);
+
+  /** The vault path an embed like ![[photo.png]] shows, or null. */
+  const resolveEmbed = useCallback((target: string, from: string | null) => resolveFile(target, from, otherFiles), [otherFiles]);
+
+  /**
+   * Save an image pasted or dropped into a note, in the note's folder (where
+   * Obsidian puts it by default). Returns what to embed: the file's name, or
+   * its full path if another image already has that name.
+   *
+   * Resolves only after the new file list has rendered: the editor draws the
+   * embed as soon as it's inserted, and with the old list the image would show
+   * as "not found" (setFiles doesn't take effect until React renders).
+   */
+  const addImage = useCallback(
+    async (file: File, notePath: string | null): Promise<string | null> => {
+      const body = new FormData();
+      body.append("folder", notePath ? folderOf(notePath) : "");
+      body.append("file", file);
+      try {
+        const { path } = (await (await api("/api/files/image", { method: "POST", body })).json()) as { path: string };
+        const rendered = new Promise<void>((resolve) => listRendered.current.push(resolve));
+        const list = await loadFiles();
+        if (list) await rendered;
+        const name = path.split("/").pop()!;
+        const sameName = listOtherFiles(list ?? []).filter((f) => f.name.toLowerCase() === name.toLowerCase());
+        return sameName.length > 1 ? path : name;
+      } catch (e) {
+        report(e);
+        return null;
+      }
     },
-    [noteList],
+    [loadFiles, report],
   );
+
+  /** Which note a link points to: an exact "folder/name", else a same-named note, preferring the current folder. */
+  const resolveLink = useCallback((target: string, from: string | null) => resolveNote(target, from, noteList), [noteList]);
 
   /** Follow a link: open the note, creating it next to the current one if it doesn't exist yet. */
   const openLink = useCallback(
@@ -142,10 +164,12 @@ export function useVault(report: (e: unknown) => void) {
   const renameEntry = useCallback(
     (path: string, name: string) => {
       const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
-      const isNote = path.toLowerCase().endsWith(".md");
-      return moveEntryTo(path, parent + (isNote && !name.toLowerCase().endsWith(".md") ? `${name}.md` : name));
+      // Keep the file's ending (.md for notes, .png for an image) if the new name leaves it off.
+      const ext = /\.[^./]+$/.exec(path)?.[0] ?? "";
+      const isFolder = !!files && !listNotes(files).some((n) => n.path === path) && !listOtherFiles(files).some((f) => f.path === path);
+      return moveEntryTo(path, parent + (!isFolder && ext && !name.toLowerCase().endsWith(ext.toLowerCase()) ? `${name}${ext}` : name));
     },
-    [moveEntryTo],
+    [moveEntryTo, files],
   );
 
   const moveEntry = useCallback(
@@ -179,6 +203,8 @@ export function useVault(report: (e: unknown) => void) {
     editor,
     noteList,
     resolveLink,
+    resolveEmbed,
+    addImage,
     openLink,
     createEntry,
     renameEntry,

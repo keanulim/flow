@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode, RefObject } from "react";
+import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import type { Thread } from "@/lib/db";
 import type { VaultEntry } from "@/lib/vault";
 import FileTree from "./FileTree";
@@ -8,6 +8,11 @@ import RenameInput from "./RenameInput";
 
 const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 const MOD = isMac ? "⌘" : "Ctrl";
+
+const SHARE_KEY = "flow.sidebar.listShare";
+const DEFAULT_SHARE = 0.35; // the chat list's share of the height, above the map
+const MIN_SHARE = 0.1;
+const MAX_SHARE = 0.85;
 
 type Props = {
   home: boolean;
@@ -38,6 +43,42 @@ type Props = {
 
 /** The left sidebar: search, Home / Chats, then either the notes (on Home) or the chat list and map. */
 export default function Sidebar(p: Props) {
+  // How much of the space below the buttons the chat list gets; the map gets the rest.
+  const split = useRef<HTMLDivElement>(null);
+  const [listShare, setListShare] = useState(DEFAULT_SHARE);
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem(SHARE_KEY));
+      if (saved >= MIN_SHARE && saved <= MAX_SHARE) setListShare(saved);
+    } catch {}
+  }, []);
+  const saveShare = (share: number) => {
+    setListShare(share);
+    try {
+      localStorage.setItem(SHARE_KEY, String(share));
+    } catch {}
+  };
+  /** Drag the line between the chat list and the map. */
+  const startResize = (e: React.PointerEvent) => {
+    const box = split.current?.getBoundingClientRect();
+    if (!box || e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const shareAt = (y: number) => Math.min(MAX_SHARE, Math.max(MIN_SHARE, (y - box.top) / box.height));
+    let latest = listShare;
+    const move = (ev: PointerEvent) => setListShare((latest = shareAt(ev.clientY)));
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+      saveShare(latest);
+    };
+    document.body.style.cursor = "row-resize";
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  };
+
   return (
     <aside
       // In chats, clicking anywhere on the sidebar except its own buttons
@@ -45,7 +86,7 @@ export default function Sidebar(p: Props) {
       onMouseDown={(e) => {
         // On Home there's no map: leave clicks alone (otherwise preventDefault
         // below would keep focus stuck in a file's rename box).
-        if (p.home || !p.mapRef.current) return;
+        if (p.home || !p.mapRef.current || (e.target as Element).closest("[data-resize]")) return;
         const control = (e.target as Element).closest("button, a, input, textarea");
         if (control && !p.mapRef.current.contains(control)) return;
         e.preventDefault(); // no text selection, no focus flicker
@@ -113,8 +154,9 @@ export default function Sidebar(p: Props) {
       {p.home ? (
         p.files && <FileTree entries={p.files} activePath={p.activeNote} filter={p.query} {...p.fileActions} />
       ) : (
-        <>
-          <nav className="max-h-[35%] shrink-0 overflow-y-auto px-2 pb-3">
+        <div ref={split} className="flex min-h-0 flex-1 flex-col">
+          {/* With a map, the list takes its share of the height (drag the line to change it); without one, all of it. */}
+          <nav style={p.map ? { height: `${listShare * 100}%` } : undefined} className={`${p.map ? "shrink-0" : "min-h-0 flex-1"} overflow-y-auto px-2 pb-3`}>
             {p.searching && p.conversations.length === 0 && <p className="px-3 py-2 text-sm text-muted">No chats match “{p.query.trim()}”</p>}
             {p.conversations.map((c) =>
               c.id === p.renamingChat ? (
@@ -139,11 +181,22 @@ export default function Sidebar(p: Props) {
             )}
           </nav>
           {p.map && (
-            <div className="flex min-h-0 flex-1 flex-col border-t border-line">
+            <>
+              <div
+                data-resize
+                role="separator"
+                aria-orientation="horizontal"
+                title="Drag to resize · double-click to reset"
+                onPointerDown={startResize}
+                onDoubleClick={() => saveShare(DEFAULT_SHARE)}
+                className="group relative h-3 shrink-0 cursor-row-resize"
+              >
+                <div className="absolute inset-x-0 top-1/2 h-px bg-line group-hover:h-0.5 group-hover:bg-line-strong" />
+              </div>
               <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">{p.map}</div>
-            </div>
+            </>
           )}
-        </>
+        </div>
       )}
 
       <div className="mt-auto border-t border-line px-3 py-2">

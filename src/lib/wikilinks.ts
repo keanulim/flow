@@ -1,6 +1,6 @@
 import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { type EditorState, type Extension, Prec, type Range, StateEffect } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 
 /**
  * Links between notes, Obsidian style: `[[Page name]]` or `[[Page name|shown text]]`.
@@ -18,6 +18,10 @@ import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type Vi
  * can point at a branch. They look like page links, with an overline instead
  * of an underline. Picking a chat in the `[[` suggestions inserts one.
  *
+ * Images, Obsidian style: `![[photo.png]]` (or `![[photo.png|300]]` for a
+ * width) shows the image from the vault. Pasting or dropping an image into a
+ * note saves it in the vault, next to the note, and inserts that embed.
+ *
  * The editor doesn't know about files: the app supplies a LinkHost.
  */
 
@@ -28,6 +32,10 @@ export type LinkHost = {
   chats: () => { id: string; title: string; detail: string }[]; // for the [[ suggestions
   chatExists: (id: string) => boolean;
   openChat: (id: string) => void;
+  /** Where to load an embedded image from, or null if no such file. */
+  imageUrl: (target: string) => string | null;
+  /** Save a pasted or dropped image in the vault; resolves with what to embed (its name), or null if it failed. */
+  saveImage: (file: File) => Promise<string | null>;
 };
 
 export const CHAT_PREFIX = "chat:";
@@ -36,7 +44,8 @@ const CHAT_LINK = /\[([^[\]\n]+)\]\(chat:([\w-]+)\)/g;
 /** `[title](chat:id)`, with brackets in the title swapped for parentheses so the link stays intact. */
 export const chatLink = (title: string, id: string) => `[${title.replace(/\[/g, "(").replace(/\]/g, ")").replace(/\s+/g, " ").trim() || "Chat"}](${CHAT_PREFIX}${id})`;
 
-const LINK = /\[\[([^[\]\n|]+)(?:\|([^[\]\n]+))?\]\]/g;
+const LINK = /(?<!!)\[\[([^[\]\n|]+)(?:\|([^[\]\n]+))?\]\]/g; // not ![[embeds]]
+const EMBED = /!\[\[([^[\]\n|]+)(?:\|([^[\]\n]*))?\]\]/g;
 const FENCE = /^\s*(```|~~~)/;
 
 /** Sent when the app's file list changes, so link styling (exists / new) refreshes. */
@@ -62,11 +71,14 @@ export function findLinks(state: EditorState): Found[] {
 }
 
 type FoundChat = { from: number; to: number; id: string; labelFrom: number; labelTo: number };
+/** `![[target|width]]`; width in pixels when the part after | is a number (Obsidian's syntax). */
+type FoundEmbed = { from: number; to: number; target: string; width: number | null };
 
-/** Page links and chat links, outside code fences. */
-function scan(state: EditorState): { pages: Found[]; chats: FoundChat[] } {
+/** Page links, chat links and embeds, outside code fences. */
+function scan(state: EditorState): { pages: Found[]; chats: FoundChat[]; embeds: FoundEmbed[] } {
   const pages: Found[] = [];
   const chats: FoundChat[] = [];
+  const embeds: FoundEmbed[] = [];
   let inFence = false;
   for (let n = 1; n <= state.doc.lines; n++) {
     const line = state.doc.line(n);
@@ -82,8 +94,13 @@ function scan(state: EditorState): { pages: Found[]; chats: FoundChat[] } {
       const from = line.from + m.index!;
       chats.push({ from, to: from + m[0].length, id: m[2], labelFrom: from + 1, labelTo: from + 1 + m[1].length });
     }
+    for (const m of line.text.matchAll(EMBED)) {
+      const from = line.from + m.index!;
+      const width = /^\s*\d+\s*$/.test(m[2] ?? "") ? Number(m[2]) : null;
+      embeds.push({ from, to: from + m[0].length, target: m[1].trim(), width });
+    }
   }
-  return { pages, chats };
+  return { pages, chats, embeds };
 }
 
 function activeLines(state: EditorState): Set<number> {
@@ -99,7 +116,15 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
     const host = getHost();
     const active = activeLines(view.state);
     const decos: Range<Decoration>[] = [];
-    const { pages, chats } = scan(view.state);
+    const { pages, chats, embeds } = scan(view.state);
+    for (const e of embeds) {
+      const widget = new EmbedWidget(e.target, host.imageUrl(e.target), e.width);
+      // On the cursor's line the source shows too (to edit it), with the image below it.
+      if (active.has(view.state.doc.lineAt(e.from).number)) {
+        decos.push(Decoration.mark({ class: "cm-embed-raw" }).range(e.from, e.to));
+        decos.push(Decoration.widget({ widget, side: 1 }).range(e.to));
+      } else decos.push(Decoration.replace({ widget }).range(e.from, e.to));
+    }
     for (const c of chats) {
       const cls = `cm-chatlink${host.chatExists(c.id) ? "" : " cm-chatlink-missing"}`;
       const attributes = { "data-chat": c.id, title: host.chatExists(c.id) ? "Open chat" : "This chat no longer exists" };
@@ -139,6 +164,52 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
     },
     { decorations: (v) => v.decorations },
   );
+
+  /**
+   * Save image files and insert an embed for each near `pos` (where they were
+   * pasted or dropped), each on its own line. A position inside an existing
+   * link or embed (dropping onto an image) moves to its end, so it isn't split.
+   */
+  const insertImages = (view: EditorView, files: File[], pos: number) => {
+    void Promise.all(files.map((f) => getHost().saveImage(f))).then((names) => {
+      const embeds = names.filter((n): n is string => !!n).map((n) => `![[${n}]]`);
+      if (!embeds.length) return;
+      const { state } = view;
+      let at = Math.min(pos, state.doc.length);
+      const { pages, chats, embeds: existing } = scan(state);
+      const inside = [...pages, ...chats, ...existing].find((r) => at > r.from && at < r.to);
+      if (inside) at = inside.to;
+      const line = state.doc.lineAt(at);
+      const before = at > line.from ? "\n" : "";
+      const after = at < line.to ? "\n" : "";
+      const insert = before + embeds.join("\n") + after;
+      view.dispatch({ changes: { from: at, insert }, selection: { anchor: at + insert.length - after.length }, userEvent: "input.paste" });
+    });
+  };
+  const imagesIn = (list: FileList | undefined | null) => [...(list ?? [])].filter((f) => f.type.startsWith("image/"));
+
+  const files = EditorView.domEventHandlers({
+    paste(e, view) {
+      const images = imagesIn(e.clipboardData?.files);
+      if (!images.length) return false; // ordinary text: CodeMirror pastes it
+      e.preventDefault();
+      // A screenshot comes as "image.png"; name it like Obsidian does.
+      const d = new Date(); // local time, YYYYMMDDHHmmss
+      const stamp = [d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join("");
+      const named = images.map((f, i) => new File([f], `Pasted image ${stamp}${images.length > 1 ? `-${i + 1}` : ""}.${extensionFor(f.type)}`, { type: f.type }));
+      const sel = view.state.selection.main;
+      if (!sel.empty) view.dispatch({ changes: { from: sel.from, to: sel.to }, selection: { anchor: sel.from } }); // pasting over a selection replaces it
+      insertImages(view, named, view.state.selection.main.head);
+      return true;
+    },
+    drop(e, view) {
+      const images = imagesIn(e.dataTransfer?.files);
+      if (!images.length) return false;
+      e.preventDefault();
+      insertImages(view, images, view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? view.state.selection.main.head);
+      return true;
+    },
+  });
 
   const clicks = EditorView.domEventHandlers({
     mousedown(e) {
@@ -225,8 +296,47 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
     ".cm-chatlink": { color: "inherit", backgroundColor: red(14), borderTop: `1.5px solid ${red(55)}`, borderRadius: "2px", cursor: "pointer", transition: "background 120ms" },
     ".cm-chatlink *": { color: "inherit" },
     ".cm-chatlink:hover": { backgroundColor: red(24) },
+    ".cm-embed": { display: "block", margin: "0.25em 0", lineHeight: "0" },
+    ".cm-embed img": { maxWidth: "100%", borderRadius: "6px", cursor: "text" },
+    ".cm-embed-missing": { display: "inline-block", lineHeight: "1.5", fontSize: "0.85em", color: "var(--muted)", border: "1px dashed var(--line-strong)", borderRadius: "6px", padding: "0.15em 0.6em" },
+    ".cm-embed-raw, .cm-embed-raw *": { color: "var(--muted)" }, // the highlighter would color it as a link
     ".cm-chatlink-missing": { backgroundColor: "transparent", borderTop: `1.5px dashed ${red(70)}`, borderRadius: "0", cursor: "default" },
   });
 
-  return [plugin, clicks, Prec.high(keymap.of([{ key: "Mod-k", run: linkCommand }])), autocompletion({ override: [complete], activateOnTyping: true }), theme];
+  return [plugin, clicks, files, Prec.high(keymap.of([{ key: "Mod-k", run: linkCommand }])), autocompletion({ override: [complete], activateOnTyping: true }), theme];
+}
+
+const extensionFor = (type: string) => ({ "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg", "image/avif": "avif", "image/bmp": "bmp" })[type] ?? "png";
+
+/** An embedded image, or a note saying it can't be found. Clicking it puts the cursor on its line (showing the source). */
+class EmbedWidget extends WidgetType {
+  constructor(
+    readonly target: string,
+    readonly src: string | null,
+    readonly width: number | null,
+  ) {
+    super();
+  }
+  eq(other: EmbedWidget) {
+    return other.target === this.target && other.src === this.src && other.width === this.width;
+  }
+  toDOM() {
+    if (!this.src) {
+      const missing = document.createElement("span");
+      missing.className = "cm-embed-missing";
+      missing.textContent = `Image not found: ${this.target}`;
+      return missing;
+    }
+    const wrap = document.createElement("span");
+    wrap.className = "cm-embed";
+    const img = document.createElement("img");
+    img.src = this.src;
+    img.alt = this.target;
+    if (this.width) img.style.width = `${this.width}px`;
+    wrap.appendChild(img);
+    return wrap;
+  }
+  ignoreEvent() {
+    return false;
+  }
 }

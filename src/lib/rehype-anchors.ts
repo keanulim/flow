@@ -20,6 +20,7 @@ export function rehypeAnchors({ anchors }: { anchors: Anchor[] }) {
     const walk = (parent: Parent) => {
       for (const child of parent.children) {
         if (child.type === "text") texts.push({ node: child, parent });
+        else if (child.type === "element" && (child.properties.className as string[] | undefined)?.includes("katex")) continue; // a formula: its text is drawn by KaTeX, not highlightable
         else if ("children" in child) walk(child);
       }
     };

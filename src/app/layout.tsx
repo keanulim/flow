@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import "katex/dist/katex.min.css";
 import "./globals.css";
 import { THEME_BOOT_SCRIPT } from "@/lib/theme";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "Flow",
+  title: "_",
   description: "An AI chat built for flow state: side threads that never clutter the main conversation.",
 };
 

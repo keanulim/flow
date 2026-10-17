@@ -2,13 +2,17 @@
 
 import type { RefObject } from "react";
 import type { Conversation } from "@/hooks/useConversation";
+import type { Attachment } from "@/lib/shared";
 import { Composer, MessageList, StreamingBubble } from "./Messages";
 
 type Props = {
   conv: Conversation;
   streaming: Record<string, string>;
-  send: (threadId: string | null, text: string) => void;
+  /** What the model is doing in a thread when it isn't writing ("Searching: …"). */
+  activity: Record<string, string>;
+  send: (threadId: string | null, text: string, attachments?: Attachment[]) => void;
   stop: (threadId: string) => void;
+  retry: (threadId: string, messageId: string) => void;
   /** Thread id whose note is being made, if any. */
   makingNote: string | null;
   onMakeNote: (threadId: string) => void;
@@ -24,7 +28,7 @@ type Props = {
 };
 
 /** The center: the focused thread, with breadcrumbs when it's a side thread, and its message box. */
-export default function ThreadPane({ conv, streaming, send, stop, makingNote, onMakeNote, flashId, onJumpToSource, onMouseUp, onClick, onClickAnywhere, inputRef, scrollRef }: Props) {
+export default function ThreadPane({ conv, streaming, activity, send, stop, retry, makingNote, onMakeNote, flashId, onJumpToSource, onMouseUp, onClick, onClickAnywhere, inputRef, scrollRef }: Props) {
   const { rootId, focus, focusThread, focusMessages, branches, showSide, sideId, lineage, goTo, goUp, fork, openThread } = conv;
   const nested = !!focusThread?.parentThreadId;
 
@@ -86,9 +90,10 @@ export default function ThreadPane({ conv, streaming, send, stop, makingNote, on
               flashId={flashId}
               onFork={(messageId) => fork(focus, messageId, null)}
               onOpen={openThread}
+              onRetry={streaming[focus] === undefined ? (messageId) => conv.confirmRetry(messageId) && retry(focus, messageId) : undefined}
             />
           )}
-          {focus && streaming[focus] !== undefined && <StreamingBubble content={streaming[focus]} />}
+          {focus && streaming[focus] !== undefined && <StreamingBubble content={streaming[focus]} activity={activity[focus]} />}
         </div>
       </div>
       <Composer
@@ -96,7 +101,8 @@ export default function ThreadPane({ conv, streaming, send, stop, makingNote, on
         onStop={() => focus && stop(focus)}
         busy={!!focus && streaming[focus] !== undefined}
         placeholder={nested ? "Continue this side thread…" : "Message the main thread…"}
-        onSend={(text) => send(focus, text)}
+        onSend={(text, files) => send(focus, text, files)}
+        attachments
         autoFocus
       />
     </main>

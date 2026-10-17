@@ -4,6 +4,8 @@ import { ensureSyntaxTree, HighlightStyle, syntaxHighlighting, syntaxTree } from
 import { EditorState, type Extension, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, placeholder, WidgetType } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import katex from "katex";
+import { DISPLAY_LINE, DISPLAY_OPEN, displayClose, findInlineMath } from "./math";
 import { indent, parseToggles, toggles } from "./toggles";
 import { type LinkHost, wikilinks } from "./wikilinks";
 
@@ -17,6 +19,7 @@ import { type LinkHost, wikilinks } from "./wikilinks";
  *  - [Web links](https://…) and bare URLs are clickable; images show.
  *  - Tables render as tables until the cursor moves into one.
  *  - Code fences become a box; `---` becomes a rule; `- [ ]` tasks get a checkbox.
+ *  - Math ($x$, \(x\), $$ … $$ blocks) renders with KaTeX off the cursor.
  *  - `>` is an ordinary character here: the parser's blockquote rule is
  *    removed, so there's no quote styling and Enter doesn't repeat `>`.
  *
@@ -68,6 +71,33 @@ export function build(state: EditorState): DecorationSet {
       continue;
     }
 
+    // A display formula: $$ … $$ (or \[ … \]) over several lines, or one line of $$x$$.
+    const open = DISPLAY_OPEN.exec(text);
+    const single = open ? null : DISPLAY_LINE.exec(text);
+    if (open || single) {
+      let last = n;
+      if (open) {
+        const close = displayClose(open[1]);
+        while (last < doc.lines && !close.test(doc.line(last + 1).text)) last++;
+        if (last === doc.lines) last = n; // never closed (still being typed): leave it as text
+        else last++;
+      }
+      if (open && last === n) {
+        decos.push(Decoration.line({ class: "cm-md-math-src" }).range(line.from));
+        continue;
+      }
+      let editing = false;
+      for (let k = n; k <= last; k++) if (active.has(k)) editing = true;
+      const tex = open ? doc.sliceString(doc.line(n + 1).from, doc.line(last - 1).to) : (single![1] ?? single![2]);
+      if (editing) {
+        for (let k = n; k <= last; k++) decos.push(Decoration.line({ class: "cm-md-math-src" }).range(doc.line(k).from));
+      } else {
+        decos.push(Decoration.replace({ widget: new MathWidget(tex, true), block: true }).range(line.from, doc.line(last).to));
+      }
+      n = last;
+      continue;
+    }
+
     const h = HEADING.exec(text);
     if (h) {
       decos.push(Decoration.line({ class: `cm-md-h cm-md-h${h[1].length}${n === 1 ? " cm-md-first" : ""}` }).range(line.from));
@@ -81,6 +111,7 @@ export function build(state: EditorState): DecorationSet {
   }
 
   inline(state, active, decos);
+  inlineMath(state, active, decos);
   return Decoration.set(decos, true);
 }
 
@@ -186,6 +217,52 @@ function inline(state: EditorState, active: Set<number>, decos: Range<Decoration
       }
     },
   });
+}
+
+/** $x$ and \(x\) off the cursor's line, drawn as formulas. Skips code blocks and display blocks (drawn above). */
+function inlineMath(state: EditorState, active: Set<number>, decos: Range<Decoration>[]) {
+  const doc = state.doc;
+  let fence = false;
+  let display: RegExp | null = null;
+  for (let n = 1; n <= doc.lines; n++) {
+    const text = doc.line(n).text;
+    if (FENCE.test(text)) fence = !fence;
+    if (fence || FENCE.test(text)) continue;
+    if (display) {
+      if (display.test(text)) display = null;
+      continue;
+    }
+    const open = DISPLAY_OPEN.exec(text);
+    if (open) {
+      display = displayClose(open[1]);
+      continue;
+    }
+    if (active.has(n) || DISPLAY_LINE.test(text)) continue;
+    const from = doc.line(n).from;
+    for (const m of findInlineMath(text)) decos.push(Decoration.replace({ widget: new MathWidget(m.tex, false) }).range(from + m.from, from + m.to));
+  }
+}
+
+/** A formula, drawn by KaTeX. Bad TeX shows in red instead of failing. Clicking it puts the cursor in its source. */
+class MathWidget extends WidgetType {
+  constructor(
+    readonly tex: string,
+    readonly display: boolean,
+  ) {
+    super();
+  }
+  eq(other: MathWidget) {
+    return other.tex === this.tex && other.display === this.display;
+  }
+  toDOM() {
+    const el = document.createElement(this.display ? "div" : "span");
+    el.className = this.display ? "cm-md-math cm-md-math-display" : "cm-md-math";
+    el.innerHTML = katex.renderToString(this.tex, { displayMode: this.display, throwOnError: false });
+    return el;
+  }
+  ignoreEvent() {
+    return false;
+  }
 }
 
 /** A task's checkbox. Clicking it flips [ ] <-> [x] in the text. */
@@ -383,6 +460,9 @@ const theme = EditorView.theme({
   ".cm-md-fence-open": { borderTopLeftRadius: "8px", borderTopRightRadius: "8px" },
   ".cm-md-fence-close": { borderBottomLeftRadius: "8px", borderBottomRightRadius: "8px" },
   ".cm-md-fence-edge": { lineHeight: "0.9em" }, // the hidden ``` lines become the box's padding
+  ".cm-md-math": { cursor: "text" },
+  ".cm-md-math-display": { padding: "0.25em 0", overflowX: "auto", overflowY: "hidden" },
+  ".cm-md-math-src": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: "0.875em" },
 });
 
 export function liveMarkdown(getLinkHost?: () => LinkHost, placeholderText = "Start writing…"): Extension[] {

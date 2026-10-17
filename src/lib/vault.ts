@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { IMAGE_FILE } from "./notes";
 
 /**
  * The vault: a plain folder of Markdown files, like an Obsidian vault. Notes
@@ -59,7 +60,7 @@ export async function ensureVault() {
   await fs.mkdir(VAULT_ROOT, { recursive: true });
 }
 
-/** Folders and .md files, folders first, alphabetical. Hidden entries (.trash, .obsidian) are skipped. */
+/** Folders, .md notes and images, folders first, alphabetical. Hidden entries (.trash, .obsidian) are skipped. */
 export async function listVault(): Promise<VaultEntry[]> {
   await ensureVault();
   const walk = async (dir: string): Promise<VaultEntry[]> => {
@@ -69,7 +70,7 @@ export async function listVault(): Promise<VaultEntry[]> {
       if (e.name.startsWith(".")) continue;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) out.push({ type: "folder", name: e.name, path: toRel(abs), children: await walk(abs) });
-      else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) out.push({ type: "file", name: e.name, path: toRel(abs) });
+      else if (e.isFile() && (e.name.toLowerCase().endsWith(".md") || IMAGE_FILE.test(e.name))) out.push({ type: "file", name: e.name, path: toRel(abs) });
     }
     return out.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name, undefined, { numeric: true }) : a.type === "folder" ? -1 : 1));
   };
@@ -106,12 +107,44 @@ export async function moveEntry(from: string, to: string): Promise<string> {
   checkName(path.basename(to));
   const dest = await resolveInVault(to);
   if (src === dest) return toRel(dest);
-  if ((await fs.stat(src)).isFile() && !dest.toLowerCase().endsWith(".md")) throw new VaultError("Notes must end in .md");
+  if ((await fs.stat(src)).isFile()) {
+    const ext = path.extname(src).toLowerCase();
+    if (ext === ".md" && !dest.toLowerCase().endsWith(".md")) throw new VaultError("Notes must end in .md");
+    if (ext !== ".md" && path.extname(dest).toLowerCase() !== ext) throw new VaultError(`Keep the ${ext} ending`);
+  }
   if (dest.startsWith(src + path.sep)) throw new VaultError("Can't move a folder into itself");
   if (await exists(dest)) throw new VaultError("Something with that name is already there", 409);
   await resolveInVault(toRel(path.dirname(dest)), { mustExist: true }); // destination folder must exist
   await fs.rename(src, dest);
   return toRel(dest);
+}
+
+/** An image's bytes (images only: notes are read with readNote). */
+export async function readImage(rel: string): Promise<Buffer> {
+  if (!IMAGE_FILE.test(rel)) throw new VaultError("Not an image");
+  return fs.readFile(await resolveInVault(rel, { mustExist: true }));
+}
+
+/**
+ * Save an image into a folder of the vault. If the name is taken, adds a
+ * number ("photo 1.png") rather than overwriting. Returns its vault path.
+ */
+export async function saveImage(folder: string, name: string, bytes: Buffer): Promise<string> {
+  checkName(name);
+  if (!IMAGE_FILE.test(name)) throw new VaultError("Only images can be added");
+  const dir = folder ? await resolveInVault(folder, { mustExist: true }) : (await ensureVault(), VAULT_ROOT);
+  const ext = path.extname(name);
+  const base = name.slice(0, -ext.length);
+  for (let n = 0; n < 1000; n++) {
+    const abs = await resolveInVault(toRel(path.join(dir, n ? `${base} ${n}${ext}` : name)));
+    try {
+      await fs.writeFile(abs, bytes, { flag: "wx" }); // wx: fail if it exists, never overwrite
+      return toRel(abs);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+  }
+  throw new VaultError("Too many files with that name", 409);
 }
 
 /** "Delete" = move into .trash with a timestamp, so nothing is lost by accident. */

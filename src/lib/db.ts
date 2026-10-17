@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
+import type { Attachment } from "./shared";
 
 export type Role = "user" | "assistant";
 
@@ -23,6 +24,8 @@ export type Message = {
   role: Role;
   content: string;
   createdAt: number;
+  /** Files sent with a user message. */
+  attachments?: Attachment[];
 };
 
 const DB_PATH = process.env.FLOW_DB_PATH ?? path.join(process.cwd(), "data", "flow.db");
@@ -69,6 +72,22 @@ function migrate(db: Database.Database) {
   if (!cols.has("kind")) db.exec(`ALTER TABLE threads ADD COLUMN kind TEXT NOT NULL DEFAULT 'thread'`);
   // 1 once a thread's title has been written by the model (from what it's about).
   if (!cols.has("auto_titled")) db.exec(`ALTER TABLE threads ADD COLUMN auto_titled INTEGER NOT NULL DEFAULT 0`);
+  // Files sent with a message, as a JSON array of Attachment (null: none).
+  const msgCols = new Set((db.prepare(`PRAGMA table_info(messages)`).all() as { name: string }[]).map((c) => c.name));
+  if (!msgCols.has("attachments")) db.exec(`ALTER TABLE messages ADD COLUMN attachments TEXT`);
+  // The AI assistant beside a note: one conversation per note, kept out of Chats.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS note_chat_messages (
+      id         TEXT PRIMARY KEY,
+      note_path  TEXT NOT NULL,
+      role       TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content    TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_note_chat_path ON note_chat_messages(note_path, created_at);
+  `);
+  const noteCols = new Set((db.prepare(`PRAGMA table_info(note_chat_messages)`).all() as { name: string }[]).map((c) => c.name));
+  if (!noteCols.has("attachments")) db.exec(`ALTER TABLE note_chat_messages ADD COLUMN attachments TEXT`);
 }
 
 export const db = (g.flowDb ??= open());
@@ -76,7 +95,14 @@ migrate(db);
 
 const threadCols = `id, parent_thread_id AS parentThreadId, fork_message_id AS forkMessageId,
   anchor_text AS anchorText, title, kind, created_at AS createdAt`;
-const messageCols = `id, thread_id AS threadId, role, content, created_at AS createdAt`;
+const messageCols = `id, thread_id AS threadId, role, content, created_at AS createdAt, attachments`;
+
+/** A messages row as a Message: the attachments column is JSON, and absent when there are none. */
+function toMessage(row: Omit<Message, "attachments"> & { attachments: string | null }): Message {
+  const { attachments, ...rest } = row;
+  return attachments ? { ...rest, attachments: JSON.parse(attachments) as Attachment[] } : rest;
+}
+type MessageRow = Parameters<typeof toMessage>[0];
 
 export function getThread(id: string): Thread | undefined {
   return db.prepare(`SELECT ${threadCols} FROM threads WHERE id = ?`).get(id) as Thread | undefined;
@@ -85,7 +111,8 @@ export function getThread(id: string): Thread | undefined {
 export function getMessages(threadId: string): Message[] {
   return db
     .prepare(`SELECT ${messageCols} FROM messages WHERE thread_id = ? ORDER BY created_at, rowid`)
-    .all(threadId) as Message[];
+    .all(threadId)
+    .map((r) => toMessage(r as MessageRow));
 }
 
 export function listConversations(): Thread[] {
@@ -161,7 +188,8 @@ export function getConversation(rootId: string): { threads: Thread[]; messages: 
           `SELECT ${messageCols} FROM messages WHERE thread_id IN (${ids.map(() => "?").join(",")})
            ORDER BY created_at, rowid`,
         )
-        .all(...ids) as Message[])
+        .all(...ids)
+        .map((r) => toMessage(r as MessageRow)))
     : [];
   return { threads, messages };
 }
@@ -231,11 +259,67 @@ export function deleteThread(id: string) {
   db.prepare(`DELETE FROM threads WHERE id = ?`).run(id);
 }
 
-export function addMessage(threadId: string, role: Role, content: string, id: string = crypto.randomUUID()): Message {
-  const msg: Message = { id, threadId, role, content, createdAt: Date.now() };
+/** Delete one message (and, through the schema's cascade, any side threads branched from it). */
+export function deleteMessage(id: string) {
+  db.prepare(`DELETE FROM messages WHERE id = ?`).run(id);
+}
+
+export function addMessage(threadId: string, role: Role, content: string, id: string = crypto.randomUUID(), attachments: Attachment[] = []): Message {
+  const msg: Message = { id, threadId, role, content, createdAt: Date.now(), ...(attachments.length ? { attachments } : {}) };
   db.prepare(
-    `INSERT INTO messages (id, thread_id, role, content, created_at)
-     VALUES (@id, @threadId, @role, @content, @createdAt)`,
-  ).run(msg);
+    `INSERT INTO messages (id, thread_id, role, content, created_at, attachments)
+     VALUES (@id, @threadId, @role, @content, @createdAt, @attachments)`,
+  ).run({ ...msg, attachments: attachments.length ? JSON.stringify(attachments) : null });
   return msg;
+}
+
+/** Ids of every file some message still has attached (the rest can be deleted). */
+export function referencedAttachmentIds(): Set<string> {
+  const rows = db
+    .prepare(`SELECT attachments FROM messages WHERE attachments IS NOT NULL UNION ALL SELECT attachments FROM note_chat_messages WHERE attachments IS NOT NULL`)
+    .all() as { attachments: string }[];
+  return new Set(rows.flatMap((r) => (JSON.parse(r.attachments) as Attachment[]).map((a) => a.id)));
+}
+
+// ---------- the assistant beside a note (one conversation per note path) ----------
+
+export type NoteChatMessage = { id: string; role: Role; content: string; createdAt: number; attachments?: Attachment[] };
+
+export function getNoteChat(notePath: string): NoteChatMessage[] {
+  return (
+    db
+      .prepare(`SELECT id, role, content, created_at AS createdAt, attachments FROM note_chat_messages WHERE note_path = ? ORDER BY created_at, rowid`)
+      .all(notePath) as (Omit<NoteChatMessage, "attachments"> & { attachments: string | null })[]
+  ).map(({ attachments, ...m }) => (attachments ? { ...m, attachments: JSON.parse(attachments) as Attachment[] } : m));
+}
+
+export function addNoteChatMessage(notePath: string, role: Role, content: string, attachments: Attachment[] = []): NoteChatMessage {
+  const msg = { id: crypto.randomUUID(), role, content, createdAt: Date.now(), ...(attachments.length ? { attachments } : {}) };
+  db.prepare(`INSERT INTO note_chat_messages (id, note_path, role, content, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?)`).run(
+    msg.id,
+    notePath,
+    role,
+    content,
+    msg.createdAt,
+    attachments.length ? JSON.stringify(attachments) : null,
+  );
+  return msg;
+}
+
+/** Start the note's conversation over. */
+export function clearNoteChat(notePath: string) {
+  db.prepare(`DELETE FROM note_chat_messages WHERE note_path = ?`).run(notePath);
+}
+
+/** A note or folder was renamed or moved: its notes' conversations follow. */
+export function moveNoteChats(from: string, to: string) {
+  db.prepare(
+    `UPDATE note_chat_messages SET note_path = ? || substr(note_path, length(?) + 1)
+     WHERE note_path = ? OR note_path LIKE ? ESCAPE '\\'`,
+  ).run(to, from, from, from.replace(/[\\%_]/g, (c) => "\\" + c) + "/%");
+}
+
+/** A note or folder was deleted: so are its notes' conversations. */
+export function deleteNoteChats(notePath: string) {
+  db.prepare(`DELETE FROM note_chat_messages WHERE note_path = ? OR note_path LIKE ? ESCAPE '\\'`).run(notePath, notePath.replace(/[\\%_]/g, (c) => "\\" + c) + "/%");
 }

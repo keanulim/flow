@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { currentTheme, setTheme, THEMES, type ThemeId } from "@/lib/theme";
+import { WEB_SEARCH_KEY } from "@/lib/shared";
 
 const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 const MOD = isMac ? "⌘" : "Ctrl";
@@ -81,6 +82,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
         </div>
         <div className="overflow-y-auto px-5 py-4">
           <Appearance />
+          <AiSettings />
           <h3 className="mb-3 text-xs font-medium tracking-wider text-muted uppercase">Keyboard shortcuts</h3>
           {SHORTCUTS.map(({ section, items }) => (
             <div key={section} className="mb-4">
@@ -126,6 +128,39 @@ function Appearance() {
           </button>
         ))}
       </div>
+    </section>
+  );
+}
+
+/** Whether the model may search the web. Remembered on this device; read when a message is sent. */
+function AiSettings() {
+  const [webSearch, setWebSearch] = useState(() => {
+    try {
+      return localStorage.getItem(WEB_SEARCH_KEY) !== "off";
+    } catch {
+      return true;
+    }
+  });
+  return (
+    <section className="mb-6">
+      <h3 className="mb-3 text-xs font-medium tracking-wider text-muted uppercase">AI</h3>
+      <label className="flex cursor-pointer items-start justify-between gap-4 text-sm">
+        <span>
+          <span className="block">Search the web</span>
+          <span className="block text-xs text-muted">Lets replies look things up and read pages, with sources. Each search costs about a cent.</span>
+        </span>
+        <input
+          type="checkbox"
+          checked={webSearch}
+          onChange={(e) => {
+            setWebSearch(e.target.checked);
+            try {
+              localStorage.setItem(WEB_SEARCH_KEY, e.target.checked ? "on" : "off");
+            } catch {}
+          }}
+          className="mt-0.5 size-4 shrink-0 accent-[var(--accent)]"
+        />
+      </label>
     </section>
   );
 }

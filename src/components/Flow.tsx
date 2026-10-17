@@ -6,6 +6,7 @@ import { api, ApiError, devMockHeader } from "@/lib/client";
 import type { NoteEvent } from "@/lib/chat-note";
 import type { Thread } from "@/lib/db";
 import { HOME_NOTE, HOME_WELCOME } from "@/lib/home-note";
+import { isNotePath } from "@/lib/notes";
 import type { LinkHost } from "@/lib/wikilinks";
 import { useChatIndex } from "@/hooks/useChatIndex";
 import { useConversation } from "@/hooks/useConversation";
@@ -17,6 +18,9 @@ import SidePanel from "./chat/SidePanel";
 import Sidebar from "./Sidebar";
 import ContextMenu from "./ContextMenu";
 import Settings from "./Settings";
+import AssistantPanel from "./AssistantPanel";
+import LambdaMark from "./LambdaMark";
+import ImageView from "./ImageView";
 
 // The notes editor (CodeMirror) is only downloaded once a note is opened, so
 // the chat view doesn't load it.
@@ -38,6 +42,7 @@ export default function Flow() {
   const [query, setQuery] = useState("");
   const [home, setHome] = useState(false); // Home (notes) instead of a conversation
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false); // the AI assistant beside the open note
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const [selection, setSelection] = useState<Selection | null>(null); // highlighted text in a reply
   const [flashId, setFlashId] = useState<string | null>(null);
@@ -67,7 +72,7 @@ export default function Flow() {
   const { goTo, openThread, goUp, reveal, fork } = conv;
 
   const vault = useVault(report);
-  const { files, loadFiles, openNote, openFresh, noteHistory, goBack, editor, noteList, resolveLink, openLink } = vault;
+  const { files, loadFiles, openNote, openFresh, noteHistory, goBack, editor, noteList, resolveLink, openLink, resolveEmbed, addImage } = vault;
   const { loadChatIndex, chatOptions, chatExists } = useChatIndex(report);
 
   /** Start a conversation and show it. Throws on failure; callers catch. */
@@ -89,7 +94,7 @@ export default function Flow() {
     },
     [loadConversations, refreshThread, rootId],
   );
-  const { streaming, send, stop } = useStreaming({ report, setTree, newConversation, onReplyDone });
+  const { streaming, activity, send, retry, stop } = useStreaming({ report, setTree, newConversation, onReplyDone });
 
   // ---------- chat search ----------
 
@@ -227,7 +232,19 @@ export default function Flow() {
    * the server streams one JSON event per line (see NoteEvent).
    */
   const [makingNote, setMakingNote] = useState<string | null>(null); // thread id being summarized
-  const [liveNote, setLiveNote] = useState<{ path: string; markdown: string } | null>(null);
+  // A note being written by the AI (Make note, or the assistant editing it): shown read-only as it changes.
+  const [liveNote, setLiveNote] = useState<{ path: string; markdown: string; label: string } | null>(null);
+  // The note assistant: save the editor before it reads the note, show its edits live, reload after an undo.
+  const [noteVersion, setNoteVersion] = useState(0);
+  const flushNote = useCallback(async () => {
+    await editor.current?.flush();
+  }, [editor]);
+  const setAssistantLive = useCallback(
+    (markdown: string | null) => setLiveNote(markdown === null || !openNote ? null : { path: openNote, markdown, label: "AI is editing…" }),
+    [openNote],
+  );
+  const reloadNote = useCallback(() => setNoteVersion((v) => v + 1), []);
+
   const makeNote = useCallback(
     async (threadId: string) => {
       setMakingNote(threadId);
@@ -245,7 +262,7 @@ export default function Flow() {
           for (const line of lines.filter(Boolean)) {
             const e = JSON.parse(line) as NoteEvent;
             if (e.type === "start") {
-              setLiveNote({ path: e.path, markdown: "" });
+              setLiveNote({ path: e.path, markdown: "", label: "Writing from chat…" });
               void loadChatIndex(); // fresh chat titles for [[ suggestions
               await loadFiles(); // before switching, so Home doesn't flash an empty file list
               lastConversation.current = rootId; // "Chats" comes back here
@@ -299,8 +316,13 @@ export default function Flow() {
       chats: () => chatOptions,
       chatExists,
       openChat: (id) => void openChat(id),
+      imageUrl: (target) => {
+        const path = resolveEmbed(target, openNote);
+        return path ? `/api/files/raw?path=${encodeURIComponent(path)}` : null;
+      },
+      saveImage: (file) => addImage(file, openNote),
     }),
-    [resolveLink, openNote, openLink, noteList, chatOptions, chatExists, openChat],
+    [resolveLink, openNote, openLink, noteList, chatOptions, chatExists, openChat, resolveEmbed, addImage],
   );
 
   // ---------- chats: text selection, highlights, clicks ----------
@@ -466,12 +488,17 @@ export default function Flow() {
       />
 
       {home ? (
+        <>
         <main className="min-w-0 flex-1">
-          {openNote ? (
+          {openNote && !isNotePath(openNote) ? (
+            <ImageView path={openNote} />
+          ) : openNote ? (
             <NoteEditor
               // Remounts when a note finishes writing, so it loads the saved file.
-              key={liveNote?.path === openNote ? "live" : "file"}
+              // Remounts after an undo too (noteVersion), to load the file again.
+              key={`${liveNote?.path === openNote ? "live" : "file"}-${noteVersion}`}
               live={liveNote?.path === openNote ? liveNote.markdown : undefined}
+              liveLabel={liveNote?.label}
               ref={editor}
               path={openNote}
               onError={report}
@@ -483,12 +510,36 @@ export default function Flow() {
             <div className="flex h-full items-center justify-center text-sm text-muted">Open a note from the sidebar, or create one.</div>
           )}
         </main>
+        {assistantOpen && openNote && isNotePath(openNote) && (
+          <AssistantPanel
+            notePath={openNote}
+            onBeforeSend={flushNote}
+            onLive={setAssistantLive}
+            onReload={reloadNote}
+            onClose={() => setAssistantOpen(false)}
+            onError={report}
+          />
+        )}
+        {/* The AI assistant button (bottom right), for the open note */}
+        {!assistantOpen && openNote && isNotePath(openNote) && (
+          <button
+            onClick={() => setAssistantOpen(true)}
+            title="Ask AI about this note"
+            aria-label="Ask AI about this note"
+            className="fixed right-6 bottom-6 z-40 flex size-11 items-center justify-center rounded-full border border-line bg-white text-black shadow-md transition-transform hover:scale-105"
+          >
+            <LambdaMark className="size-4" />
+          </button>
+        )}
+        </>
       ) : (
         <>
           <ThreadPane
             conv={conv}
             streaming={streaming}
+            activity={activity}
             send={send}
+            retry={retry}
             stop={stop}
             makingNote={makingNote}
             onMakeNote={makeNote}
@@ -501,7 +552,7 @@ export default function Flow() {
             scrollRef={mainScroll}
           />
           {showSide && (
-            <SidePanel conv={conv} streaming={streaming} send={send} stop={stop} onJumpToSource={jumpToSource} onMouseUp={onMouseUp} onClick={onClick} inputRef={sideInput} />
+            <SidePanel conv={conv} streaming={streaming} activity={activity} send={send} retry={retry} stop={stop} onJumpToSource={jumpToSource} onMouseUp={onMouseUp} onClick={onClick} inputRef={sideInput} />
           )}
         </>
       )}

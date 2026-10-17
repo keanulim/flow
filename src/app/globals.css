@@ -18,6 +18,13 @@
   --map-here: #78716c; /* the dot you're on */
   --map-node: #d6d3d1; /* dots off the path */
   --danger: #dc2626;
+  /* Code highlighting in replies: muted, so code reads calmly */
+  --code-keyword: #7c3aed;
+  --code-string: #15803d;
+  --code-number: #b45309;
+  --code-title: #1d4ed8;
+  --code-type: #0e7490;
+  --code-comment: #a8a29e;
 }
 
 /* Themes (Settings > Appearance). Each redefines the same tokens; everything
@@ -40,6 +47,12 @@
   --map-here: #d6d3d1;
   --map-node: #4a4643;
   --danger: #f87171;
+  --code-keyword: #c4b5fd;
+  --code-string: #86efac;
+  --code-number: #fcd34d;
+  --code-title: #93c5fd;
+  --code-type: #67e8f9;
+  --code-comment: #78716c;
 }
 
 [data-theme="paper"] {
@@ -59,6 +72,12 @@
   --map-here: #7c7060;
   --map-node: #d8ccb5;
   --danger: #b4321f;
+  --code-keyword: #6d28d9;
+  --code-string: #4d7c0f;
+  --code-number: #9a3412;
+  --code-title: #1e40af;
+  --code-type: #155e75;
+  --code-comment: #a39885;
 }
 
 @theme inline {
@@ -94,6 +113,14 @@ body {
 .md code { font-size: 0.875em; background: var(--hover); padding: 0.1em 0.35em; border-radius: 4px; }
 .md pre { background: var(--hover); padding: 0.9em 1em; border-radius: 8px; overflow-x: auto; }
 .md pre code { background: none; padding: 0; }
+/* highlight.js token classes (rehype-highlight), colored per theme */
+.md .hljs-keyword, .md .hljs-selector-tag, .md .hljs-meta .hljs-keyword, .md .hljs-doctag { color: var(--code-keyword); }
+.md .hljs-string, .md .hljs-regexp, .md .hljs-addition, .md .hljs-template-tag { color: var(--code-string); }
+.md .hljs-number, .md .hljs-literal, .md .hljs-symbol, .md .hljs-bullet { color: var(--code-number); }
+.md .hljs-title, .md .hljs-title.function_, .md .hljs-section, .md .hljs-name { color: var(--code-title); }
+.md .hljs-type, .md .hljs-built_in, .md .hljs-attr, .md .hljs-attribute, .md .hljs-property { color: var(--code-type); }
+.md .hljs-comment, .md .hljs-quote, .md .hljs-meta { color: var(--code-comment); font-style: italic; }
+.md .hljs-deletion { color: var(--danger); }
 .md blockquote { border-left: 2px solid var(--line); padding-left: 0.9em; color: var(--muted); }
 .md table { border-collapse: collapse; font-size: 0.9em; }
 .md th, .md td { border: 1px solid var(--line); padding: 0.35em 0.7em; }

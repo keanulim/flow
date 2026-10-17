@@ -18,7 +18,9 @@ type Props = {
 
 const EXPANDED_KEY = "flow.files.expanded";
 const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
-const label = (e: VaultEntry) => (e.type === "file" ? e.name.replace(/\.md$/i, "") : e.name);
+/** Notes and images are shown without their ending; an image gets it as a badge instead (like Obsidian). */
+const label = (e: VaultEntry) => (e.type === "file" ? e.name.replace(/\.[^.]+$/, "") : e.name);
+const badge = (e: VaultEntry) => (e.type === "file" && !/\.md$/i.test(e.name) ? e.name.split(".").pop()!.toUpperCase() : null);
 
 /**
  * The vault as a folder tree, Obsidian style: click to open, drag onto a folder
@@ -214,7 +216,10 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
               }}
             />
           ) : (
-            <span className="min-w-0 flex-1 truncate">{label(e)}</span>
+            <>
+              <span className="min-w-0 flex-1 truncate">{label(e)}</span>
+              {badge(e) && <span className="shrink-0 text-[10px] font-medium tracking-wide text-muted">{badge(e)}</span>}
+            </>
           )}
           {renaming !== e.path && isFolder && (
             <span className="hidden shrink-0 group-hover:flex">
@@ -273,7 +278,7 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
               </div>
             ))
           ) : (
-            <p className="px-3 py-2 text-sm text-muted">No notes match “{filter.trim()}”</p>
+            <p className="px-3 py-2 text-sm text-muted">Nothing matches “{filter.trim()}”</p>
           )
         ) : entries.length ? (
           entries.map((e) => row(e, 0))

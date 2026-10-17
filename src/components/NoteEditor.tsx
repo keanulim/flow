@@ -21,6 +21,8 @@ type Props = {
   back?: { label: string; go: () => void };
   /** The note is being written (from a chat): show this text, read-only, as it arrives. Remount when it's done. */
   live?: string;
+  /** What to call the live writing in the header ("Writing from chat…", "AI is editing…"). */
+  liveLabel?: string;
   ref?: React.Ref<NoteEditorHandle>;
 };
 
@@ -31,7 +33,7 @@ const SAVE_DELAY = 600; // ms after the last keystroke
  * and immediately when the note is switched away from or about to be moved.
  * There's one view, as in Notion: the editor itself renders the Markdown.
  */
-export default function NoteEditor({ path, onError, links, linksVersion, back, live, ref }: Props) {
+export default function NoteEditor({ path, onError, links, linksVersion, back, live, liveLabel = "Writing…", ref }: Props) {
   const [content, setContent] = useState<string | null>(null); // null = loading
   const [status, setStatus] = useState<"saved" | "unsaved" | "saving" | "error">("saved");
   const latest = useRef(""); // newest text, for saves that run after a render
@@ -115,7 +117,7 @@ export default function NoteEditor({ path, onError, links, linksVersion, back, l
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b border-line px-8 py-3 text-sm">
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-line px-8 text-sm"> {/* same height as the AI panel's header, so the lines meet */}
         <div className="min-w-0 truncate text-muted">
           {back && (
             <button onClick={back.go} className="mr-3 rounded px-1.5 py-0.5 hover:bg-hover hover:text-fg" title={`Back to ${back.label} (⌘⌥←)`}>
@@ -133,7 +135,7 @@ export default function NoteEditor({ path, onError, links, linksVersion, back, l
           {live !== undefined ? (
             <span className="text-accent">
               <span className="mr-1.5 inline-block size-1.5 animate-pulse rounded-full bg-accent align-middle" />
-              Writing from chat…
+              {liveLabel}
             </span>
           ) : (
             <span className={status === "error" ? "text-danger" : ""}>

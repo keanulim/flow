@@ -160,6 +160,18 @@ export function useConversation({ report, mainInput, sideInput, onNavigate }: Op
     else goTo(t.id);
   }, [pendingReveal, byId, goTo]);
 
+  /**
+   * Whether it's OK to retry a reply: replacing it also deletes the side threads
+   * branched from it, so ask first when there are any.
+   */
+  const confirmRetry = useCallback(
+    (messageId: string) => {
+      const n = tree.threads.filter((t) => t.forkMessageId === messageId).length;
+      return n === 0 || confirm(`Retrying replaces this reply and deletes the ${n === 1 ? "side thread" : `${n} side threads`} branched from it. Retry anyway?`);
+    },
+    [tree.threads],
+  );
+
   /** Pick up a thread's new title (titles are written by the model after a thread's first reply). */
   const refreshThread = useCallback(
     async (id: string) => {
@@ -273,6 +285,7 @@ export function useConversation({ report, mainInput, sideInput, onNavigate }: Op
     goUp,
     reveal,
     refreshThread,
+    confirmRetry,
     fork,
     saveToMap,
     deleteThread,
