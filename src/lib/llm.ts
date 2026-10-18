@@ -317,9 +317,10 @@ export async function quickText({ system, prompt, maxTokens, mock }: Omit<Comple
 // ---------- the assistant beside a note ----------
 
 const NOTE_SYSTEM = `You are the writing assistant inside Flow, a notes app. You help the user write, organize, and think through one Markdown note, which is given with each message.
-When the user asks you to add to, change, reorganize, or brainstorm in the note, edit the note with the str_replace_based_edit_tool instead of writing the content in chat. Prefer focused edits (str_replace, insert); use create only to rewrite the whole note. You can only edit this note.
+When the user asks you to add to, change, reorganize, or brainstorm in the note, edit the note with the str_replace_based_edit_tool instead of writing the content in chat. Prefer focused edits (str_replace, insert); use create only to rewrite the whole note. Of existing notes, you can only edit this one.
+When the user asks for new pages (or to split this note into pages), make each with create_note, then link to them from this note with [[Page name]] where they fit, using the exact name create_note reports. Only create pages when asked.
 Notes this one links to with [[Page]] are included for context. To read any other note, use read_note with its name. Use web search when the user asks for facts you'd need to look up, and cite web pages with inline Markdown links.
-After editing, reply with one short sentence saying what you changed. Don't repeat the note's content back. If the user just asks a question, answer briefly without editing.
+After editing, reply with one short sentence saying what you changed (write page names plainly in the reply, without [[ ]]: [[links]] only work inside notes). Don't repeat the note's content back. If the user just asks a question, answer briefly without editing.
 The note's Markdown supports headings, bullets, "- [ ]" tasks, tables, code blocks, [[Page]] links to other notes, and collapsible toggles written exactly like this (keep the blank lines):
 
 <details>
@@ -337,6 +338,23 @@ const READ_NOTE_TOOL = {
   input_schema: { type: "object" as const, properties: { name: { type: "string", description: 'The note\'s name, like "Trip ideas", or its path, like "School/Biology.md".' } }, required: ["name"] },
   eager_input_streaming: true,
 };
+/** Make a new page (never overwrites). Its content can be long, so it streams; the input is checked before use. */
+const CREATE_NOTE_TOOL = {
+  name: "create_note",
+  description:
+    "Create a new note (page) in the user's notes with the given Markdown content. Creates only: it never changes an existing note (a taken name gets a number added). Returns the page's final name, to link to with [[name]].",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      name: { type: "string", description: 'The page name, like "Lisbon itinerary" (no .md).' },
+      content: { type: "string", description: "The page's Markdown content." },
+      folder: { type: "string", description: 'Folder to put it in, like "School". Leave out to use the current note\'s folder.' },
+    },
+    required: ["name", "content"],
+  },
+  eager_input_streaming: true,
+};
+const MAX_CREATED = 10; // pages per message
 const MAX_STEPS = 12; // model turns per message: each round of edits, note reads, or a paused search
 
 export type NoteTurn = { role: "user" | "assistant"; content: string | Anthropic.Beta.BetaContentBlockParam[] };
@@ -352,6 +370,8 @@ export type NoteAssistantInput = {
   context: string;
   /** Read another note by name or path (null: no such note). */
   readNote: (name: string) => Promise<{ path: string; content: string } | null>;
+  /** Create a new page (folder undefined: the current note's folder). Resolves with its path; throws a message the model can act on. */
+  createNote: (name: string, content: string, folder?: string) => Promise<string>;
   webSearch?: boolean;
 };
 
@@ -362,10 +382,10 @@ export type NoteAssistantInput = {
  * note's new text after each edit, and the web pages cited; returns the final note.
  */
 export async function* streamNoteAssistant(
-  { history, message, files = [], note, path, context, readNote, webSearch }: NoteAssistantInput,
+  { history, message, files = [], note, path, context, readNote, createNote, webSearch }: NoteAssistantInput,
   { signal, mock }: Omit<StreamOptions, "webSearch"> = {},
 ): AsyncGenerator<ChatEvent, { note: string; changed: boolean }> {
-  if (!process.env.ANTHROPIC_API_KEY || mock) return yield* mockNoteAssistant(message, note, context, files.length);
+  if (!process.env.ANTHROPIC_API_KEY || mock) return yield* mockNoteAssistant(message, note, context, files.length, createNote);
   client ??= new Anthropic();
   let current = note;
   let changed = false;
@@ -374,7 +394,8 @@ export async function* streamNoteAssistant(
   let text = "";
   const cited = new Map<string, string>();
   const seen = new Map<string, string>();
-  let tools: Anthropic.Beta.BetaToolUnion[] = [EDITOR_TOOL, READ_NOTE_TOOL, ...(webSearch ? WEB_TOOLS : [])];
+  let tools: Anthropic.Beta.BetaToolUnion[] = [EDITOR_TOOL, READ_NOTE_TOOL, CREATE_NOTE_TOOL, ...(webSearch ? WEB_TOOLS : [])];
+  let created = 0;
   let searchDisabled = false;
   const messages: Anthropic.Beta.BetaMessageParam[] = [
     ...history.map((t) => ({ role: t.role, content: t.content })),
@@ -437,13 +458,14 @@ export async function* streamNoteAssistant(
         } else if (event.type === "content_block_stop") {
           const t = toolInput.get(event.index);
           if (t?.name === "read_note") yield { type: "status", text: `Reading ${readNoteName(t.json) ?? "a note"}` };
+          else if (t?.name === "create_note") yield { type: "status", text: `Creating ${readNoteName(t.json) ?? "a page"}` };
           else if (t) yield { type: "status", text: describeTool(t.name, t.json) };
         }
       }
     } catch (e) {
       // Web search not enabled for this organization: carry on without it, once.
       if (webSearch && !searchDisabled && step === 0 && !wroteText && isWebToolError(e)) {
-        tools = [EDITOR_TOOL, READ_NOTE_TOOL];
+        tools = [EDITOR_TOOL, READ_NOTE_TOOL, CREATE_NOTE_TOOL];
         searchDisabled = true;
         step--;
         continue;
@@ -487,6 +509,26 @@ export async function* streamNoteAssistant(
             ? { type: "tool_result", tool_use_id: call.id, content: `<note path="/${found.path}">\n${found.content.slice(0, 40000)}\n</note>` }
             : { type: "tool_result", tool_use_id: call.id, content: `No note named "${name}". Check the list of notes.`, is_error: true },
         );
+      } else if (call.name === "create_note") {
+        // Streamed input too: check every field before creating anything.
+        const { name, content, folder } = (call.input ?? {}) as { name?: unknown; content?: unknown; folder?: unknown };
+        if (typeof name !== "string" || !name.trim() || typeof content !== "string" || (folder !== undefined && typeof folder !== "string")) {
+          results.push({ type: "tool_result", tool_use_id: call.id, content: "create_note needs a name and content (strings), and optionally a folder (string).", is_error: true });
+          continue;
+        }
+        if (created >= MAX_CREATED) {
+          results.push({ type: "tool_result", tool_use_id: call.id, content: `That's the limit of ${MAX_CREATED} new pages per message.`, is_error: true });
+          continue;
+        }
+        try {
+          const made = await createNote(name, content, folder?.trim() || undefined);
+          created++;
+          yield { type: "created", path: made };
+          const finalName = made.split("/").pop()!.replace(/\.md$/i, "");
+          results.push({ type: "tool_result", tool_use_id: call.id, content: `Created "${finalName}" (/${made}). Link to it from the note with [[${finalName}]].` });
+        } catch (e) {
+          results.push({ type: "tool_result", tool_use_id: call.id, content: `Couldn't create the page: ${e instanceof Error ? e.message : "unknown error"}`, is_error: true });
+        }
       } else {
         results.push({ type: "tool_result", tool_use_id: call.id, content: `Unknown tool ${call.name}.`, is_error: true });
       }
@@ -500,7 +542,7 @@ export async function* streamNoteAssistant(
   return { note: current, changed };
 }
 
-/** The note name from read_note's streamed input, once it's complete. */
+/** The page name from read_note's or create_note's streamed input, once it's complete. */
 function readNoteName(json: string): string | null {
   try {
     const name = (JSON.parse(json) as { name?: unknown }).name;
@@ -511,7 +553,13 @@ function readNoteName(json: string): string | null {
 }
 
 /** No API key (or dev mock): pretend to edit when asked to change the note, so the UI can be tried for free. */
-async function* mockNoteAssistant(message: string, note: string, context: string, fileCount = 0): AsyncGenerator<ChatEvent, { note: string; changed: boolean }> {
+async function* mockNoteAssistant(
+  message: string,
+  note: string,
+  context: string,
+  fileCount = 0,
+  createNote?: NoteAssistantInput["createNote"],
+): AsyncGenerator<ChatEvent, { note: string; changed: boolean }> {
   const linked = [...context.matchAll(/<note path="\/([^"]+)">/g)].map((m) => m[1]);
   for (const p of linked) {
     yield { type: "status", text: `Reading ${p.replace(/\.md$/i, "")}` };
@@ -525,11 +573,23 @@ async function* mockNoteAssistant(message: string, note: string, context: string
     current = `${note.replace(/\s*$/, "")}\n\n- (mock edit) ${message.slice(0, 60)}\n`;
     yield { type: "note", content: current };
   }
+  // Asked for a page: make one and link it, like the real assistant would.
+  let made = "";
+  if (createNote && /\bpages?\b/i.test(message)) {
+    yield { type: "status", text: "Creating Mock page" };
+    await new Promise((r) => setTimeout(r, 400));
+    const path = await createNote("Mock page", `# Mock page\n\nCreated by the mock assistant for: ${message.slice(0, 80)}\n`);
+    yield { type: "created", path };
+    made = path.split("/").pop()!.replace(/\.md$/i, "");
+    current = `${current.replace(/\s*$/, "")}\n\n- See [[${made}]]\n`;
+    yield { type: "note", content: current };
+  }
   const saw = (linked.length ? ` I could see the linked notes: ${linked.join(", ")}.` : "") + (fileCount ? ` You attached ${fileCount} file${fileCount > 1 ? "s" : ""}.` : "");
-  const reply = (edits ? "**Mock mode:** added a line to the end of the note." : "**Mock mode:** set `ANTHROPIC_API_KEY` for real answers.") + saw;
+  const did = made ? `created [[${made}]] and linked it.` : edits ? "added a line to the end of the note." : "";
+  const reply = (did ? `**Mock mode:** ${did}` : "**Mock mode:** set `ANTHROPIC_API_KEY` for real answers.") + saw;
   for (const word of reply.split(/(?<=\s)/)) {
     yield { type: "text", text: word };
     await new Promise((r) => setTimeout(r, 15));
   }
-  return { note: current, changed: edits };
+  return { note: current, changed: edits || !!made };
 }

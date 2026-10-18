@@ -193,19 +193,7 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
           }`}
         >
           <span className="flex w-4 shrink-0 justify-center text-muted">
-            {isFolder && (
-              <svg
-                className={`size-3 ${open ? "rotate-90" : ""}`}
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M6 3.5 10.5 8 6 12.5" />
-              </svg>
-            )}
+            {isFolder && <Chevron open={open} />}
           </span>
           {renaming === e.path ? (
             <RenameInput
@@ -309,6 +297,43 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The folder arrow. Its style goes with the theme, picked in CSS (globals.css,
+ * .chevron-*), so switching themes needs no re-render: sharp corners in Light
+ * and Dark, soft rounded ones in Paper, pixels in Neon.
+ */
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <>
+      <svg className={`chevron-sharp size-3 ${open ? "rotate-90" : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="butt" strokeLinejoin="miter" aria-hidden="true">
+        <path d="M6 3.5 10.5 8 6 12.5" />
+      </svg>
+      <svg className={`chevron-soft size-3 ${open ? "rotate-90" : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M6 3.5 10.5 8 6 12.5" />
+      </svg>
+      <PixelChevron open={open} />
+    </>
+  );
+}
+
+/**
+ * Neon's folder arrow, drawn in pixels to match the lambda icon: five 2×2px
+ * blocks making a ">" (or "v" when open), in a 10×10px box. crispEdges turns
+ * off antialiasing. Open is drawn, not rotated, so it stays on whole pixels.
+ */
+function PixelChevron({ open }: { open: boolean }) {
+  // One block per row, stepping right then back; shifted to the middle of the 5×5 grid.
+  const right = [[0, 0], [1, 1], [2, 2], [1, 3], [0, 4]].map(([x, y]) => [x + 1, y]);
+  const cells = open ? right.map(([x, y]) => [y, x]) : right; // flipped across the diagonal: "v"
+  return (
+    <svg className="chevron-pixel" width="10" height="10" viewBox="0 0 5 5" shapeRendering="crispEdges" fill="currentColor" aria-hidden="true">
+      {cells.map(([x, y]) => (
+        <rect key={`${x}-${y}`} x={x} y={y} width="1" height="1" />
+      ))}
+    </svg>
   );
 }
 

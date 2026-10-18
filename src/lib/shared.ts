@@ -33,7 +33,9 @@ export type ChatEvent =
   | { type: "status"; text: string }
   | { type: "sources"; sources: Source[] }
   /** The note assistant changed the note: its whole new text. */
-  | { type: "note"; content: string };
+  | { type: "note"; content: string }
+  /** The note assistant created a new page (its vault path). */
+  | { type: "created"; path: string };
 
 /** A reply with its sources appended as one Markdown line. Saved like this, so they show whenever the chat is reopened. */
 export function withSources(text: string, sources: Source[]): string {

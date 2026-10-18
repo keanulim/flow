@@ -4,7 +4,7 @@ import { addNoteChatMessage, clearNoteChat, getNoteChat } from "@/lib/db";
 import { streamNoteAssistant } from "@/lib/llm";
 import { linkedPages, listNotes, type NoteInfo, resolveNote } from "@/lib/notes";
 import { type ChatEvent, EMPTY_REPLY, errorNote, type Source, STOPPED_NOTE, withSources } from "@/lib/shared";
-import { listVault, readNote, VaultError, writeNote } from "@/lib/vault";
+import { createNoteWithContent, listVault, readNote, VaultError, writeNote } from "@/lib/vault";
 
 /**
  * The AI assistant beside a note. Each note has its own conversation (kept out
@@ -13,7 +13,7 @@ import { listVault, readNote, VaultError, writeNote } from "@/lib/vault";
  * GET ?path=    the note's conversation
  * DELETE ?path= start it over
  * POST { path, content, message, attachments? }: answer, streaming newline-delimited JSON
- *   events (text, status, and the note's new text after each edit). `content`
+ *   events (text, status, the note's new text after each edit, pages it created). `content`
  *   is the note as the editor has it; the edited note is saved when done.
  */
 export async function GET(req: Request) {
@@ -68,6 +68,15 @@ export async function POST(req: Request) {
       return null;
     }
   };
+  /** For create_note: a new page, in the current note's folder unless another is named. Never overwrites. */
+  const createOther = async (name: string, body: string, folder?: string) => {
+    if (body.length > 200_000) throw new Error("That page is too long");
+    try {
+      return await createNoteWithContent(folder?.replace(/^\/+|\/+$/g, "") ?? (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""), name, body);
+    } catch (e) {
+      throw new Error(e instanceof VaultError ? (e.status === 404 ? `There's no folder "${folder}"` : e.message) : "the file couldn't be written");
+    }
+  };
   addNoteChatMessage(path, "user", text, attachments);
 
   const stop = new AbortController();
@@ -80,7 +89,7 @@ export async function POST(req: Request) {
           controller.enqueue(encoder.encode(JSON.stringify(e) + "\n"));
         } catch {} // the page went away
       };
-      const gen = streamNoteAssistant({ history, message: text, files, note: content, path, context, readNote: readOther, webSearch }, { mock, signal: stop.signal });
+      const gen = streamNoteAssistant({ history, message: text, files, note: content, path, context, readNote: readOther, createNote: createOther, webSearch }, { mock, signal: stop.signal });
       let reply = "";
       let sources: Source[] = [];
       let note = content;

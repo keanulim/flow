@@ -4,12 +4,12 @@ import { type ChatEvent, type Source, WEB_SEARCH_KEY } from "./shared";
 /**
  * Send to a chat endpoint (/api/chat, or the note assistant's) and read the
  * streamed reply: newline-delimited JSON events (text, what the model is doing,
- * sources, a changed note). Calls the handlers as events arrive and resolves
+ * sources, a changed note, a created page). Calls the handlers as events arrive and resolves
  * with the whole reply. Throws like fetch (an abort rejects).
  */
 export async function postChat(
   body: Record<string, unknown>,
-  handlers: { onText: (text: string) => void; onStatus: (text: string) => void; onNote?: (content: string) => void },
+  handlers: { onText: (text: string) => void; onStatus: (text: string) => void; onNote?: (content: string) => void; onCreated?: (path: string) => void },
   signal?: AbortSignal,
   url = "/api/chat",
 ): Promise<{ text: string; sources: Source[] }> {
@@ -39,6 +39,8 @@ export async function postChat(
         handlers.onStatus(e.text);
       } else if (e.type === "note") {
         handlers.onNote?.(e.content);
+      } else if (e.type === "created") {
+        handlers.onCreated?.(e.path);
       } else {
         sources = e.sources;
       }

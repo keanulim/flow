@@ -14,14 +14,26 @@ const DEFAULT_SHARE = 0.35; // the chat list's share of the height, above the ma
 const MIN_SHARE = 0.1;
 const MAX_SHARE = 0.85;
 
+// The Home / Chats / Files row.
+const NAV = "flex h-9 items-center rounded-md text-sm";
+const ON = "bg-hover text-fg";
+const OFF = "text-muted hover:bg-hover hover:text-fg";
+
 type Props = {
-  home: boolean;
+  /**
+   * What the sidebar shows. "home": nothing below the buttons (Home is a page
+   * of its own; a search still lists results). "files": the file tree.
+   * "chats": New chat, the chat list and the map.
+   */
+  view: "home" | "chats" | "files";
+  /** With view "home", which list a search shows. */
+  filesSide: boolean;
   query: string;
   onQuery: (q: string) => void;
   onHome: () => void;
-  /** Home is highlighted only while the Home note is open. */
-  homeActive: boolean;
   onChats: () => void;
+  /** The notes side, on the last note open there. */
+  onFiles: () => void;
   onNewChat: () => void;
   onSettings: () => void;
   /** On Home: the vault's files and what to do with them. */
@@ -41,7 +53,7 @@ type Props = {
   mapRef: RefObject<HTMLDivElement | null>;
 };
 
-/** The left sidebar: search, Home / Chats, then either the notes (on Home) or the chat list and map. */
+/** The left sidebar: search, a Home / Chats / Files row, then either the notes or (with New chat) the chat list and map. */
 export default function Sidebar(p: Props) {
   // How much of the space below the buttons the chat list gets; the map gets the rest.
   const split = useRef<HTMLDivElement>(null);
@@ -86,7 +98,7 @@ export default function Sidebar(p: Props) {
       onMouseDown={(e) => {
         // On Home there's no map: leave clicks alone (otherwise preventDefault
         // below would keep focus stuck in a file's rename box).
-        if (p.home || !p.mapRef.current || (e.target as Element).closest("[data-resize]")) return;
+        if (p.filesSide || !p.mapRef.current || (e.target as Element).closest("[data-resize]")) return;
         const control = (e.target as Element).closest("button, a, input, textarea");
         if (control && !p.mapRef.current.contains(control)) return;
         e.preventDefault(); // no text selection, no focus flicker
@@ -116,42 +128,43 @@ export default function Sidebar(p: Props) {
                 e.stopPropagation();
                 if (p.query) p.onQuery("");
                 else e.currentTarget.blur();
-              } else if (e.key === "Enter" && !p.home && p.conversations[0]) {
+              } else if (e.key === "Enter" && !p.filesSide && p.conversations[0]) {
                 p.onOpenChat(p.conversations[0].id);
               }
             }}
-            placeholder={p.home ? "Search files" : "Search"}
-            aria-label={p.home ? "Search files" : "Search chats"}
-            className="w-full rounded-md border border-line bg-bg py-1 pr-2 pl-8 text-sm outline-none placeholder:text-muted focus:border-line-strong"
+            placeholder="Search"
+            aria-label={p.filesSide ? "Search files" : "Search chats"}
+            className="w-full rounded-md border border-line bg-bg py-0.5 pr-2 pl-8 text-[13px] leading-5 outline-none placeholder:text-muted focus:border-line-strong"
           />
         </div>
-        <button
-          onClick={p.onHome}
-          className={`mt-2 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm ${
-            p.homeActive ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"
-          }`}
-        >
-          <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
-            <path d="M2.5 7 8 2.5 13.5 7v6a.5.5 0 0 1-.5.5H9.5v-4h-3v4H3a.5.5 0 0 1-.5-.5V7Z" />
-          </svg>
-          Home
-        </button>
-        {p.home ? (
-          <button onClick={p.onChats} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg">
-            <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+        {/* Home, then Chats and Files as icons: one row */}
+        <div className="mt-2 flex items-center gap-1">
+          <button onClick={p.onHome} className={`${NAV} gap-2 px-2.5 ${p.view === "home" ? ON : OFF}`}>
+            <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
+              <path d="M2.5 7 8 2.5 13.5 7v6a.5.5 0 0 1-.5.5H9.5v-4h-3v4H3a.5.5 0 0 1-.5-.5V7Z" />
+            </svg>
+            Home
+          </button>
+          <button onClick={p.onChats} className={`${NAV} w-9 justify-center ${p.view === "chats" ? ON : OFF}`} title="Chats" aria-label="Chats" aria-pressed={p.view === "chats"}>
+            <svg className="size-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
               <path d="M2.5 4a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 13.5 4v5.5A1.5 1.5 0 0 1 12 11H7l-3 2.5V11H4a1.5 1.5 0 0 1-1.5-1.5V4Z" />
             </svg>
-            Chats
           </button>
-        ) : (
-          <button onClick={p.onNewChat} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg">
+          <button onClick={p.onFiles} className={`${NAV} w-9 justify-center ${p.view === "files" ? ON : OFF}`} title="Files" aria-label="Files" aria-pressed={p.view === "files"}>
+            <svg className="size-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
+              <path d="M2 4.5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4.5Z" />
+            </svg>
+          </button>
+        </div>
+        {p.view === "chats" && (
+          <button onClick={p.onNewChat} className="mt-1 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg">
             <span className="w-3.5 text-center text-base leading-none">+</span>
             New chat
           </button>
         )}
       </div>
 
-      {p.home ? (
+      {p.view === "home" && !p.query.trim() ? null : p.filesSide ? (
         p.files && <FileTree entries={p.files} activePath={p.activeNote} filter={p.query} {...p.fileActions} />
       ) : (
         <div ref={split} className="flex min-h-0 flex-1 flex-col">

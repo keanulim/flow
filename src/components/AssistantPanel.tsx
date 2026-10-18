@@ -17,6 +17,10 @@ type Props = {
   onLive: (markdown: string | null) => void;
   /** The note changed on disk outside the editor (undo): load it again. */
   onReload: () => void;
+  /** The assistant created or removed pages: reload the file list. */
+  onFilesChanged: () => void;
+  /** Open a page (one the assistant just created). */
+  onOpenNote: (path: string) => void;
   onClose: () => void;
   onError: (e: unknown) => void;
 };
@@ -26,11 +30,14 @@ type Props = {
  * has its own conversation, kept out of Chats, and the assistant can edit the
  * note: reorganize it, add to it, brainstorm into it.
  */
-export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReload, onClose, onError }: Props) {
+export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReload, onFilesChanged, onOpenNote, onClose, onError }: Props) {
   const [turns, setTurns] = useState<Turn[] | null>(null); // null while loading
   const [streaming, setStreaming] = useState<string | null>(null); // reply so far, while it works
   const [activity, setActivity] = useState<string | undefined>(); // "Editing the note"
-  const [undo, setUndo] = useState<{ turnId: string; before: string } | null>(null); // the last reply's edit, reversible
+  // The last reply's changes, reversible: the note before it (null: unchanged) and the pages it created.
+  const [undo, setUndo] = useState<{ turnId: string; before: string | null; created: string[] } | null>(null);
+  const [createdBy, setCreatedBy] = useState<Record<string, string[]>>({}); // pages each reply created (this session), shown under it
+  const [creating, setCreating] = useState<string[]>([]); // pages created by the reply in progress
   const input = useRef<HTMLTextAreaElement>(null);
   const aborter = useRef<AbortController | null>(null);
 
@@ -64,6 +71,7 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
     const abort = (aborter.current = new AbortController());
     let text = "";
     let changed = false;
+    const created: string[] = [];
     let reply: string | null = null;
     try {
       const done = await postChat(
@@ -79,6 +87,11 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
             changed = true;
             onLive(content); // watch the edit land
           },
+          onCreated: (path) => {
+            created.push(path);
+            setCreating([...created]);
+            onFilesChanged(); // the new page shows in the file tree right away
+          },
         },
         abort.signal,
         "/api/notes/assist",
@@ -90,18 +103,27 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
     }
     const id = crypto.randomUUID();
     if (reply !== null) setTurns((t) => [...(t ?? []), { id, role: "assistant", content: reply }]);
-    if (changed) setUndo({ turnId: id, before });
+    if (changed || created.length) setUndo({ turnId: id, before: changed ? before : null, created });
+    if (created.length) setCreatedBy((c) => ({ ...c, [id]: created }));
+    setCreating([]);
     setStreaming(null);
     setActivity(undefined);
     onLive(null); // done: the editor loads the saved note
   };
 
+  /** Put the note back, and move the pages the reply created to the vault's trash. */
   const undoEdit = async () => {
     if (!undo) return;
     try {
-      await api("/api/files/content", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: notePath, content: undo.before }) });
+      if (undo.before !== null) {
+        await api("/api/files/content", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: notePath, content: undo.before }) });
+      }
+      for (const p of undo.created) await api(`/api/files?path=${encodeURIComponent(p)}`, { method: "DELETE" });
+      const { turnId } = undo;
       setUndo(null);
-      onReload();
+      setCreatedBy((c) => ({ ...c, [turnId]: [] }));
+      if (undo.created.length) onFilesChanged();
+      if (undo.before !== null) onReload();
     } catch (e) {
       onError(e);
     }
@@ -144,13 +166,14 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
         {empty ? (
           <div className="flex h-full flex-col justify-end pb-4">
             <p className="text-lg font-semibold">How can I help with this note?</p>
-            <p className="mt-1 text-sm text-muted">Ask me to add to it, reorganize it, or brainstorm in it. I&apos;ll edit the note directly. You can attach images, PDFs and text files too.</p>
+            <p className="mt-1 text-sm text-muted">Ask me to add to it, reorganize it, brainstorm in it, or split it into new pages. I&apos;ll edit the note directly. You can attach images, PDFs and text files too.</p>
           </div>
         ) : (
           <>
             {turns?.map((t) => (
               <div key={t.id} className="mb-4">
                 <Bubble message={t} compact />
+                {createdBy[t.id]?.length ? <CreatedPages paths={createdBy[t.id]} onOpen={onOpenNote} /> : null}
                 {undo?.turnId === t.id && (
                   <button onClick={() => void undoEdit()} className="mt-1.5 ml-1 rounded-full border border-line px-2 py-0.5 text-xs text-muted hover:border-line-strong hover:text-fg">
                     Undo changes
@@ -158,12 +181,31 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
                 )}
               </div>
             ))}
-            {streaming !== null && <StreamingBubble content={streaming} activity={activity} compact />}
+            {streaming !== null && (
+              <>
+                <StreamingBubble content={streaming} activity={activity} compact />
+                {creating.length > 0 && <CreatedPages paths={creating} onOpen={onOpenNote} />}
+              </>
+            )}
           </>
         )}
       </div>
 
       <Composer ref={input} busy={streaming !== null} placeholder="Ask about or edit this note…" onSend={(text, files) => void send(text, files)} onStop={() => aborter.current?.abort()} compact autoFocus attachments />
     </aside>
+  );
+}
+
+/** Pages a reply created, as chips that open them. */
+function CreatedPages({ paths, onOpen }: { paths: string[]; onOpen: (path: string) => void }) {
+  return (
+    <div className="mt-2 ml-1 flex flex-wrap items-center gap-1.5 text-xs">
+      <span className="text-muted">New pages</span>
+      {paths.map((p) => (
+        <button key={p} onClick={() => onOpen(p)} title={p} className="max-w-48 truncate rounded-full border border-line px-2 py-0.5 text-fg hover:border-line-strong">
+          {p.split("/").pop()!.replace(/\.md$/i, "")}
+        </button>
+      ))}
+    </div>
   );
 }

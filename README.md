@@ -1,13 +1,49 @@
 # Flow
 
-An AI chat interface built for flow state. Ask side questions without cluttering the main conversation, and always know where you are.
+An AI chat app built around one annoying problem: you're deep in a conversation, something in a reply catches your eye, you ask about it, and now the whole chat has wandered off. Twenty messages later the thing you actually cared about is buried.
 
-## Features
+Flow lets you go on tangents without wrecking the main thread. And because the good stuff from a chat usually deserves to live somewhere, it comes with a notes app (Obsidian-style, plain Markdown files) that the AI can read and write.
 
-- **Ask on the side.** Highlight any part of a reply and press `⌘K` to ask about it in a side panel. The highlight (dashed) becomes a link back to that question. Side questions stay out of the map until you press **Save to map**.
-- **Context isolation.** The main thread never sees side questions. A side thread sees the main history up to where it branched, plus the excerpt, and nothing after.
-- **Nested threads.** Save a side question to the map, then branch from inside it: it moves to the center, with breadcrumbs back to main.
-- **Map.** The sidebar shows the conversation as a tree with your current path lit up. Click the sidebar and move with WASD: `W`/`S` for siblings, `A` for parent, `D` for child. Set it to show only your path, or every thread.
+## The idea: conversations are trees
+
+Every chat in Flow is a tree, not a line.
+
+- **Highlight anything in a reply and press `⌘K`.** A side panel opens where you can ask about just that bit. The highlight stays in the reply as a link back to your side question.
+- **The main thread never sees your tangents.** A side question gets the conversation up to where you branched, plus the excerpt you highlighted, and nothing after. The main thread carries on as if you never left. This is the core of the app (`src/lib/context.ts`, tested by `npm run test:context`).
+- **Quick questions stay quick.** Side questions start as one-offs and stay out of your way. If one turns into something worth keeping, hit **Save to map** and it becomes a real branch you can branch from again.
+- **The map shows where you are.** The sidebar draws the conversation as a tree with your current path lit up. Click it and move around with WASD.
+
+Branching is also cheap. Side threads share the main thread's prompt cache up to the fork point, so asking on the side doesn't mean paying to resend the whole conversation.
+
+## Chats
+
+The chat itself has the things you'd expect, plus a few you'd want:
+
+- **Web search.** Claude searches and reads pages when it needs to, and the sources show up as chips under the reply. You can turn it off in Settings.
+- **Attachments.** Drop in images, PDFs or text and code files, paste a screenshot, or use the paperclip. Big images get shrunk in the browser first, since every image is resent with each later message.
+- **Math.** LaTeX renders properly (`$x^2$`, `$$…$$`, `\(…\)`). "$5 and $10" still reads as money, not a formula.
+- **Code** gets syntax highlighting and a copy button.
+- **Auto titles.** Chats and branches get named by what they're actually about.
+- **Retry** shows up only when a reply went wrong (an error, a stop, a cut-off). There's no point rerolling a good answer.
+
+## Notes
+
+On the Home side there's a notes app that works on a folder of Markdown files, so it plays nicely with Obsidian. Point `FLOW_VAULT_PATH` at an existing vault and it just works.
+
+- **Live preview editing.** One editor, no edit/preview toggle. Markdown renders as you type and the raw syntax shows up only on the line you're editing. Tables, task lists, code blocks and math all render.
+- **`[[Links]]` between notes**, with suggestions as you type `[[`. You can also link to chats, which show up in light red with a line on top.
+- **Toggles.** Start a line with `/>` to make a collapsible section.
+- **Images.** Paste or drop an image into a note. It's saved next to the note as a real file and embedded as `![[Pasted image ….png]]`, the same way Obsidian does it.
+- **Turn a chat into a note.** Hit **Make note** on a chat and watch it write itself: a summary of the main thread, with branches and side questions folded in as toggles right where they came up.
+
+### The note assistant
+
+The λ button in the bottom right opens an AI panel for the note you're looking at. Each note keeps its own conversation, separate from your chats, and the assistant can actually **edit the note**: reorganize it, add to it, brainstorm into it. You can watch the edits land live, and **Undo changes** puts it back.
+
+It also knows what's around the note:
+- notes linked with `[[…]]` are sent along automatically,
+- it can read any other note in your vault (read-only, it only ever edits the open one),
+- it can search the web, and you can attach files to it too.
 
 ## Running it
 
@@ -17,24 +53,42 @@ cp .env.local.example .env.local   # add your ANTHROPIC_API_KEY
 npm run dev
 ```
 
-Without an API key, Flow runs in mock mode. Each reply lists exactly what context its thread sent, which is useful for checking isolation.
+Then open http://localhost:3000.
+
+**No API key? Everything still runs.** Without one, Flow uses a mock model. Every reply lists exactly which messages its thread sent, which turns out to be a nice way to see the context isolation working. With a key set, you can still force the mock for free testing by running `localStorage.setItem("flow.mock", "1")` in the browser console.
+
+Your data stays local. Chats live in SQLite (`data/flow.db`), uploads in `data/attachments/`, and notes in `data/vault/` (or your own vault). All of it is git-ignored.
 
 ## Keyboard
 
-| Key | Action |
+The full list is in Settings (`⌘,`). The ones you'll actually use:
+
+| Key | What it does |
 |---|---|
-| `⌘K` | Ask on the side (about the highlight, or the latest reply) |
-| `Esc` | Close the side panel, then go up a level |
-| `⇧Esc` | Back to main |
-| `⌥↑` / `⌥↓` | Switch side threads |
-| `⌘\` | Toggle the side panel |
-| WASD / arrows | Move through the map (after clicking the sidebar) |
+| `⌘K` | In a chat: ask on the side about the highlight (or the latest reply). In a note: link the selection to a page |
+| `Esc` / `⇧Esc` | Close the side panel and go up a level / jump back to the main thread |
+| `⌥↑` `⌥↓` | Flip between side threads |
+| `⌘\` | Show or hide the side panel |
+| `W A S D` | Move around the map (click the sidebar first) |
+| `[[` | Link to a note or chat |
+| `⌘⌥←` | Back to the note you came from |
 
-## How it works
+Right-click handles the rest: renaming and deleting chats and files, linking a highlight to a page.
 
-- `src/lib/context.ts` builds what each thread sends to the model by walking up the thread tree. Run `npm run test:context` to check the isolation rules.
-- `src/lib/llm.ts` streams from Claude (`claude-opus-5-5`). It places a prompt-cache breakpoint at the fork point, so side threads reuse the main thread's cached prefix.
-- `src/lib/db.ts` stores threads and messages in SQLite (`data/flow.db`, git-ignored).
-- `src/lib/rehype-anchors.ts` turns highlighted excerpts into clickable marks inside rendered Markdown, including excerpts that span formatting.
+## Under the hood
 
-Stack: Next.js 15, React 19, TypeScript, Tailwind 4, better-sqlite3, Anthropic SDK.
+Built with Next.js 15, React 19, TypeScript, Tailwind 4, SQLite (better-sqlite3), CodeMirror 6 and the Anthropic SDK. Replies come from Claude Sonnet 5.5, and the quick jobs like titles go to Haiku.
+
+If you want to poke around:
+
+| File | What's in it |
+|---|---|
+| `src/lib/context.ts` | What each thread gets to see: the tree-walking that keeps tangents out of the main thread |
+| `src/lib/llm.ts` | Streaming from Claude, web tools, prompt caching, and the note assistant's editing loop |
+| `src/lib/live-markdown.ts` | The live-preview editor (CodeMirror decorations) |
+| `src/lib/wikilinks.ts` | `[[links]]`, chat links, image embeds, paste and drop |
+| `src/lib/toggles.ts` | Collapsible toggles in notes |
+| `src/lib/math.ts` | Telling math dollars from money dollars |
+| `src/lib/rehype-anchors.ts` | Turning highlighted excerpts into clickable marks in rendered replies |
+
+Tests are plain scripts: `npm run test:context`, `test:notes`, `test:math`, `test:toggles`, `test:note-edit` and `test:chat-note`.

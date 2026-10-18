@@ -103,6 +103,18 @@ export function useVault(report: (e: unknown) => void) {
     [openNote, resolveLink, loadFiles, report],
   );
 
+  /** Go to a note by path the way a link does (saving the current one, and "← back" returns). */
+  const goToNote = useCallback(
+    async (path: string) => {
+      const from = openNote;
+      if (path === from) return;
+      await editor.current?.flush();
+      if (from) setNoteHistory((h) => [...h, from]);
+      setOpenNote(path);
+    },
+    [openNote],
+  );
+
   /** Back along the trail of followed links, skipping notes deleted since. */
   const goBack = useCallback(async () => {
     const prev = [...noteHistory].reverse().find((p) => noteList.some((n) => n.path === p));
@@ -112,8 +124,8 @@ export function useVault(report: (e: unknown) => void) {
     setOpenNote(prev);
   }, [noteHistory, noteList]);
 
-  /** Open a note directly (not through a link): starts a fresh trail. */
-  const openFresh = useCallback((path: string) => {
+  /** Open a note directly (not through a link): starts a fresh trail. null: no note open. */
+  const openFresh = useCallback((path: string | null) => {
     setNoteHistory([]);
     setOpenNote(path);
   }, []);
@@ -206,6 +218,7 @@ export function useVault(report: (e: unknown) => void) {
     resolveEmbed,
     addImage,
     openLink,
+    goToNote,
     createEntry,
     renameEntry,
     moveEntry,

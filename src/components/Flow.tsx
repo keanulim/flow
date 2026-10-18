@@ -6,7 +6,7 @@ import { api, ApiError, devMockHeader } from "@/lib/client";
 import type { NoteEvent } from "@/lib/chat-note";
 import type { Thread } from "@/lib/db";
 import { HOME_NOTE, HOME_WELCOME } from "@/lib/home-note";
-import { isNotePath } from "@/lib/notes";
+import { isNotePath, listNotes, listOtherFiles } from "@/lib/notes";
 import type { LinkHost } from "@/lib/wikilinks";
 import { useChatIndex } from "@/hooks/useChatIndex";
 import { useConversation } from "@/hooks/useConversation";
@@ -40,7 +40,10 @@ const HOME_PATH = `${HOME_NOTE}.md`;
 export default function Flow() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [home, setHome] = useState(false); // Home (notes) instead of a conversation
+  const [home, setHome] = useState(false); // the main area shows a note instead of a conversation
+  // What the sidebar lists: files or chats. Separate from `home`: Home opens the
+  // Home note without switching the sidebar, so you can be on Home with chats listed.
+  const [filesSide, setFilesSide] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false); // the AI assistant beside the open note
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
@@ -80,6 +83,7 @@ export default function Flow() {
     const t: Thread = await (await api("/api/threads", { method: "POST", body: "{}" })).json();
     await loadConversations();
     setHome(false);
+    setFilesSide(false);
     setRootId(t.id);
     mainInput.current?.focus();
     return t.id;
@@ -104,7 +108,7 @@ export default function Flow() {
   const [matches, setMatches] = useState<Set<string> | null>(null); // null = not searching
   useEffect(() => {
     const q = query.trim();
-    if (!q || home) return setMatches(null); // on Home the file tree filters by name
+    if (!q || filesSide) return setMatches(null); // with files listed, the file tree filters by name
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
@@ -118,13 +122,18 @@ export default function Flow() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [query, conversations, home, report]);
+  }, [query, conversations, filesSide, report]);
   const shownConversations = matches ? conversations.filter((c) => matches.has(c.id)) : conversations;
 
   // ---------- moving between Home and chats ----------
 
-  /** Home opens its own note, Home.md at the top of the vault. If it isn't there, it's created with a welcome guide. */
+  // Bumped by every navigation, so a slow one (Home creating its note, at
+  // startup) can tell it was overtaken and not pull the view back.
+  const navSeq = useRef(0);
+
+  /** Home opens its own note, Home.md at the top of the vault (the sidebar stays as it is). If it isn't there, it's created with a welcome guide. */
   const goHome = useCallback(async () => {
+    const nav = ++navSeq.current;
     lastConversation.current = rootId;
     setHome(true);
     setRootId(null); // clears the tree, map and side panel
@@ -132,7 +141,7 @@ export default function Flow() {
     void loadChatIndex();
     await editor.current?.flush(); // if a note is open, save it before switching
     const list = await loadFiles();
-    if (!list) return; // couldn't reach the server (already reported)
+    if (!list || nav !== navSeq.current) return; // couldn't reach the server (already reported), or the user went elsewhere
     if (!list.some((e) => e.type === "file" && e.path === HOME_PATH)) {
       // No Home note yet: create it, starting with the guide to Flow.
       try {
@@ -143,8 +152,41 @@ export default function Flow() {
       }
       await loadFiles();
     }
+    if (nav !== navSeq.current) return; // the user went elsewhere meanwhile
     openFresh(HOME_PATH);
   }, [rootId, setRootId, editor, loadFiles, openFresh, loadChatIndex, report]);
+
+  // The last note open other than Home, for coming back to Files.
+  const lastNote = useRef<string | null>(null);
+  useEffect(() => {
+    if (openNote && openNote !== HOME_PATH) lastNote.current = openNote;
+  }, [openNote]);
+
+  /** Files: list the files and show the last note open there (none: an empty page, not Home). */
+  const goToFiles = useCallback(async () => {
+    navSeq.current++;
+    setFilesSide(true);
+    setQuery("");
+    if (home && openNote && openNote !== HOME_PATH) return; // a note and its files are already showing
+    if (!home) lastConversation.current = rootId;
+    await editor.current?.flush(); // leaving Home: save it first
+    // Pick the note from the list we already have, then switch the main area and
+    // the note in one update. (Switching first and picking after reloading the
+    // list showed Home, still the open note from before, for a moment.)
+    const back = lastNote.current;
+    const known = files ?? [];
+    const exists = !!back && (listNotes(known).some((n) => n.path === back) || listOtherFiles(known).some((f) => f.path === back));
+    setHome(true);
+    setRootId(null);
+    openFresh(exists ? back : null);
+    void loadChatIndex();
+    void loadFiles();
+  }, [home, openNote, rootId, setRootId, editor, files, loadFiles, loadChatIndex, openFresh]);
+
+  // Following a link out of Home (or opening a note any other way) brings the file list back.
+  useEffect(() => {
+    if (home && openNote && openNote !== HOME_PATH) setFilesSide(true);
+  }, [home, openNote]);
 
   // The app starts on Home. (Once: goHome changes whenever the open chat does.)
   const started = useRef(false);
@@ -156,8 +198,10 @@ export default function Flow() {
 
   /** Leave Home: back to the last conversation, else the most recent one. */
   const goToChats = useCallback(() => {
+    navSeq.current++;
     const id = conversations.some((c) => c.id === lastConversation.current) ? lastConversation.current : (conversations[0]?.id ?? null);
     setHome(false);
+    setFilesSide(false);
     setQuery("");
     setRootId(id);
   }, [conversations, setRootId]);
@@ -165,7 +209,9 @@ export default function Flow() {
   /** Show a conversation (leaving Home). Re-selecting the open one returns to its main thread. */
   const openConversation = useCallback(
     (id: string) => {
+      navSeq.current++;
       setHome(false);
+    setFilesSide(false);
       if (id === rootId) goTo(id);
       else setRootId(id);
     },
@@ -180,6 +226,7 @@ export default function Flow() {
         await editor.current?.flush();
         reveal(id);
         setHome(false);
+    setFilesSide(false);
         setQuery("");
         setRootId(root);
       } catch (e) {
@@ -267,6 +314,7 @@ export default function Flow() {
               await loadFiles(); // before switching, so Home doesn't flash an empty file list
               lastConversation.current = rootId; // "Chats" comes back here
               setHome(true);
+              setFilesSide(true);
               setRootId(null);
               setQuery("");
               openFresh(e.path);
@@ -451,12 +499,13 @@ export default function Flow() {
   return (
     <div className="flex h-dvh text-[15px]">
       <Sidebar
-        home={home}
+        view={onHomeNote ? "home" : filesSide ? "files" : "chats"}
+        filesSide={filesSide}
         query={query}
         onQuery={setQuery}
         onHome={goHome}
-        homeActive={onHomeNote}
         onChats={goToChats}
+        onFiles={() => void goToFiles()}
         onNewChat={() => newConversation().catch(report)}
         onSettings={() => setSettingsOpen(true)}
         files={sidebarFiles}
@@ -516,6 +565,8 @@ export default function Flow() {
             onBeforeSend={flushNote}
             onLive={setAssistantLive}
             onReload={reloadNote}
+            onFilesChanged={() => void loadFiles()}
+            onOpenNote={(path) => void vault.goToNote(path)}
             onClose={() => setAssistantOpen(false)}
             onError={report}
           />

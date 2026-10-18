@@ -57,28 +57,55 @@
 
 [data-theme="paper"] {
   color-scheme: light;
-  --bg: #f5efe3;
-  --panel: #ede5d5;
-  --fg: #2e2820;
-  --muted: #7c7060;
-  --line: #e0d5c1;
-  --line-strong: #b5a68d;
-  --hover: #e8dfcc;
-  --user: #e9dfcb;
-  --accent: #5a4cc0;
-  --accent-soft: #e2dcef;
-  --chat-link: #d4483d;
-  --map-path: #a59880;
-  --map-here: #7c7060;
-  --map-node: #d8ccb5;
-  --danger: #b4321f;
-  --code-keyword: #6d28d9;
-  --code-string: #4d7c0f;
-  --code-number: #9a3412;
-  --code-title: #1e40af;
-  --code-type: #155e75;
-  --code-comment: #a39885;
+  --bg: #ece4d4;
+  --panel: #e3d9c6;
+  --fg: #2a241c;
+  --muted: #6f6353;
+  --line: #d4c8b1;
+  --line-strong: #a8977b;
+  --hover: #ddd2bd;
+  --user: #ddd1bb;
+  --accent: #5345b8;
+  --accent-soft: #d8d0e4;
+  --chat-link: #cc4236;
+  --map-path: #9a8c73;
+  --map-here: #6f6353;
+  --map-node: #cbbea5;
+  --danger: #ab2f1d;
+  --code-keyword: #6425cc;
+  --code-string: #48740e;
+  --code-number: #923110;
+  --code-title: #1d3ea6;
+  --code-type: #14596f;
+  --code-comment: #968a75;
 }
+
+/* Neon (a fun, high-contrast theme): near-black, bright text, hot pink accents, candy-colored code. */
+[data-theme="neon"] {
+  color-scheme: dark;
+  --bg: #0a0a12;
+  --panel: #10101c;
+  --fg: #f4f3ff;
+  --muted: #a9a8cc;
+  --line: #2b2a48;
+  --line-strong: #7d6bff;
+  --hover: #1b1a30;
+  --user: #2a1838;
+  --accent: #ff4fa3;
+  --accent-soft: #3a1430;
+  --chat-link: #ff6b6b;
+  --map-path: #7d6bff;
+  --map-here: #ff4fa3;
+  --map-node: #34335a;
+  --danger: #ff5c7a;
+  --code-keyword: #ff79c6;
+  --code-string: #5cf28a;
+  --code-number: #ffb86c;
+  --code-title: #7fe7ff;
+  --code-type: #c3a6ff;
+  --code-comment: #6c6ba0;
+}
+
 
 @theme inline {
   --color-bg: var(--bg);
@@ -144,3 +171,9 @@ body {
 @media (prefers-reduced-motion: reduce) { .stream-chunk { animation: none; } }
 
 ::selection { background: var(--accent-soft); }
+
+/* The file tree's folder arrow (FileTree.tsx Chevron): one style per theme. */
+.chevron-soft, .chevron-pixel { display: none; }
+[data-theme="paper"] .chevron-sharp, [data-theme="neon"] .chevron-sharp { display: none; }
+[data-theme="paper"] .chevron-soft { display: block; }
+[data-theme="neon"] .chevron-pixel { display: block; }

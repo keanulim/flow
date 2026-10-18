@@ -101,7 +101,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** Light, Paper or Dark. Applies immediately and is remembered on this device. */
+/** Light, Paper, Dark or Neon. Applies immediately and is remembered on this device. */
 function Appearance() {
   const [theme, pick] = useState<ThemeId>(currentTheme);
   return (

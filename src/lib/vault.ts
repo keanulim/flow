@@ -119,6 +119,39 @@ export async function moveEntry(from: string, to: string): Promise<string> {
   return toRel(dest);
 }
 
+/** A page name from free text: no characters that are awkward in file names or [[links]]. */
+export function cleanNoteName(text: string): string {
+  return text
+    .replace(/\.md$/i, "")
+    .replace(/[\\/:*?"<>|#^[\]\0]/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[.\s]+/, "") // no leading dots: that would be a hidden file
+    .trim()
+    .slice(0, 100);
+}
+
+/**
+ * Create a new note with content (the note assistant's create_note). Never
+ * overwrites: if the name is taken, adds a number ("Ideas 1"). The folder
+ * must already exist. Returns its vault path.
+ */
+export async function createNoteWithContent(folder: string, name: string, content: string): Promise<string> {
+  const base = cleanNoteName(name);
+  if (!base) throw new VaultError("The page needs a name");
+  const dir = folder ? await resolveInVault(folder, { mustExist: true }) : (await ensureVault(), VAULT_ROOT);
+  if (!(await fs.stat(dir)).isDirectory()) throw new VaultError("Not a folder");
+  for (let n = 0; n < 100; n++) {
+    const abs = await resolveInVault(toRel(path.join(dir, `${n ? `${base} ${n}` : base}.md`)));
+    try {
+      await fs.writeFile(abs, content, { encoding: "utf8", flag: "wx" }); // wx: fail if it exists
+      return toRel(abs);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+  }
+  throw new VaultError("Too many pages with that name", 409);
+}
+
 /** An image's bytes (images only: notes are read with readNote). */
 export async function readImage(rel: string): Promise<Buffer> {
   if (!IMAGE_FILE.test(rel)) throw new VaultError("Not an image");

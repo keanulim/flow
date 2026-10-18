@@ -12,7 +12,8 @@
     "test:chat-note": "tsx scripts/chat-note-test.ts",
     "test:note-edit": "tsx scripts/note-edit-test.ts",
     "test:notes": "tsx scripts/notes-test.ts",
-    "test:math": "tsx scripts/math-test.ts"
+    "test:math": "tsx scripts/math-test.ts",
+    "test:create-note": "tsx scripts/create-note-test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
