@@ -5,10 +5,9 @@ import { EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { liveMarkdown } from "@/lib/live-markdown";
 import { withTrailingLine } from "@/lib/toggles";
-import { type LinkHost, pageName, refreshLinks } from "@/lib/wikilinks";
+import { type LinkHost, linkMarkdown, pageName, refreshLinks } from "@/lib/wikilinks";
 import ContextMenu from "./ContextMenu";
-
-const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+import LinkPicker, { type LinkChoice } from "./LinkPicker";
 
 export type MarkdownEditorHandle = { focus: () => void };
 
@@ -32,8 +31,16 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
   const view = useRef<EditorView | null>(null);
   const callbacks = useRef({ onChange, onBlur, links });
   callbacks.current = { onChange, onBlur, links };
-  // Right-click on selected text (one line): a menu with "Link to page".
+  // Right-click on selected text (one line): a menu with "Link to…".
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // Linking the selection (⌘K or that menu): the picker, under the selected text.
+  const [picker, setPicker] = useState<{ x: number; y: number; from: number; to: number; text: string } | null>(null);
+  const openPicker = useCallback((from: number, to: number) => {
+    const v = view.current;
+    const at = v?.coordsAtPos(from);
+    if (!v || !at) return;
+    setPicker({ x: at.left, y: at.bottom + 6, from, to, text: v.state.sliceDoc(from, to) });
+  }, []);
 
   useEffect(() => {
     const v = new EditorView({
@@ -41,7 +48,7 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
       state: EditorState.create({
         doc: withTrailingLine(initial),
         extensions: [
-          liveMarkdown(() => callbacks.current.links),
+          liveMarkdown(() => ({ ...callbacks.current.links, pickLink: (from: number, to: number) => openPicker(from, to) })),
           ...(live !== undefined ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) callbacks.current.onChange(u.state.doc.toString());
@@ -94,17 +101,50 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
   useImperativeHandle(ref, () => ({ focus: () => view.current?.focus() }), []);
 
   const linkSelection = () => {
+    const sel = view.current?.state.selection.main;
+    if (sel && !sel.empty) openPicker(sel.from, sel.to);
+  };
+
+  const closePicker = useCallback(() => {
+    setPicker(null);
+    view.current?.focus();
+  }, []);
+
+  /** Replace the selected text with a link to what was picked; a new page is also created and opened. */
+  const applyLink = (choice: LinkChoice) => {
     const v = view.current;
-    if (!v) return;
-    v.focus(); // clicking the menu took focus; the selection is still there
-    // Same as pressing ⌘K in the editor.
-    v.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: isMac, ctrlKey: !isMac, bubbles: true, cancelable: true }));
+    if (!v || !picker) return;
+    const { from, to, text } = picker;
+    setPicker(null);
+    let insert: string;
+    if (choice.kind === "new") {
+      const name = pageName(choice.name);
+      if (!name) return void v.focus();
+      insert = linkMarkdown(text, { kind: "note", target: name });
+      v.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input.link" });
+      callbacks.current.links.open(name);
+      return;
+    }
+    insert = linkMarkdown(text, choice);
+    v.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input.link" });
+    v.focus();
   };
 
   return (
     <>
       <div ref={host} className="h-full" />
-      {menu && <ContextMenu x={menu.x} y={menu.y} onClose={closeMenu} items={[{ label: "Link to page", run: linkSelection }]} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} onClose={closeMenu} items={[{ label: "Link to…", run: linkSelection }]} />}
+      {picker && (
+        <LinkPicker
+          x={picker.x}
+          y={picker.y}
+          text={picker.text}
+          notes={links.notes()}
+          chats={links.chats()}
+          onPick={applyLink}
+          onClose={closePicker}
+        />
+      )}
     </>
   );
 }

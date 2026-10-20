@@ -9,8 +9,9 @@ import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type Vi
  *    that line, where the raw `[[...]]` shows so it can be edited.
  *  - Click a link to open the page (⌘/Ctrl-click always opens, even while editing).
  *    A link to a page that doesn't exist yet is dashed; opening it creates it.
- *  - Select text and press ⌘K: the text becomes a link to a page of that name,
- *    which is created and opened (like branching a chat from a highlight).
+ *  - Select text and press ⌘K: pick what it links to (a note, a chat, a web
+ *    address), or make a new page of that name, created and opened (like
+ *    branching a chat from a highlight). The text stays as the link's label.
  *  - Typing `[[` suggests existing notes, and chats.
  *
  * Links to chats are ordinary Markdown links with a chat: address,
@@ -36,6 +37,8 @@ export type LinkHost = {
   imageUrl: (target: string) => string | null;
   /** Save a pasted or dropped image in the vault; resolves with what to embed (its name), or null if it failed. */
   saveImage: (file: File) => Promise<string | null>;
+  /** ⌘K on selected text: let the user pick what to link it to (the editor shows a picker). Without it, ⌘K links a page of that name. */
+  pickLink?: (from: number, to: number) => void;
 };
 
 export const CHAT_PREFIX = "chat:";
@@ -231,6 +234,11 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
     if (!sel.empty) {
       const text = state.sliceDoc(sel.from, sel.to);
       if (text.includes("\n")) return true; // one line only
+      const pick = getHost().pickLink;
+      if (pick) {
+        pick(sel.from, sel.to);
+        return true;
+      }
       const name = pageName(text);
       if (!name) return true;
       const insert = name === text.trim() ? `[[${name}]]` : `[[${name}|${text}]]`;
@@ -339,4 +347,17 @@ class EmbedWidget extends WidgetType {
   ignoreEvent() {
     return false;
   }
+}
+
+/** The Markdown for `label` linked to a picked target, keeping the label as the visible text. */
+export function linkMarkdown(label: string, to: { kind: "note"; target: string } | { kind: "chat"; id: string } | { kind: "url"; url: string }): string {
+  if (to.kind === "chat") return chatLink(label, to.id);
+  if (to.kind === "url") {
+    const text = label.replace(/\[/g, "(").replace(/\]/g, ")");
+    // A ")" would end the link early, and encodeURIComponent leaves parentheses alone: encode them by hand.
+    const url = to.url.replace(/\s/g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
+    return `[${text}](${url})`;
+  }
+  const text = label.replace(/[[\]|]/g, " ").replace(/\s+/g, " ").trim();
+  return text.toLowerCase() === to.target.toLowerCase() || !text ? `[[${to.target}]]` : `[[${to.target}|${text}]]`;
 }

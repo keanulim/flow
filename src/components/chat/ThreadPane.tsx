@@ -79,7 +79,8 @@ export default function ThreadPane({ conv, streaming, activity, send, stop, retr
         </header>
       )}
       <div ref={scrollRef} onMouseUp={onMouseUp} onClick={onClick} className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-6 py-8">
+        {/* Extra room at the bottom, so the last reply can scroll clear of the fade */}
+        <div className="mx-auto max-w-3xl px-6 pt-8 pb-12">
           {!rootId && <p className="mt-24 text-center text-muted">Start a conversation. Side questions stay out of its way.</p>}
           {focus && (
             <MessageList
@@ -96,15 +97,19 @@ export default function ThreadPane({ conv, streaming, activity, send, stop, retr
           {focus && streaming[focus] !== undefined && <StreamingBubble content={streaming[focus]} activity={activity[focus]} />}
         </div>
       </div>
-      <Composer
-        ref={inputRef}
-        onStop={() => focus && stop(focus)}
-        busy={!!focus && streaming[focus] !== undefined}
-        placeholder={nested ? "Continue this side thread…" : "Message the main thread…"}
-        onSend={(text, files) => send(focus, text, files)}
-        attachments
-        autoFocus
-      />
+      <div className="relative">
+        {/* Replies fade out just above the message box instead of being cut off at a hard edge */}
+        <div className="pointer-events-none absolute inset-x-0 -top-10 h-10 bg-linear-to-b from-transparent to-bg" />
+        <Composer
+          ref={inputRef}
+          onStop={() => focus && stop(focus)}
+          busy={!!focus && streaming[focus] !== undefined}
+          placeholder={nested ? "Continue this side thread…" : "Message the main thread…"}
+          onSend={(text, files) => send(focus, text, files)}
+          attachments
+          autoFocus
+        />
+      </div>
     </main>
   );
 }

@@ -32,7 +32,7 @@ Your notes live in the sidebar on Home. They're real \`.md\` files on your compu
 
 - **Write.** Type \`#\`, \`##\` or \`###\` and a space for headings. \`**bold**\`, \`*italic*\` and \`- \` lists render as you type. Click a line to see its Markdown.
 - **Fold.** Type \`/>\` at the start of a line to make a toggle like the ones on this page.
-- **Link pages.** Select some text, right-click it and choose **Link to page**. Flow creates the page and takes you there; **⌘⌥←** brings you back. You can also type \`[[\` to link a note you already have, like [[Home]].
+- **Link pages.** Select some text, press **⌘K** (or right-click → **Link to…**) and pick a page, a chat or a web address, or make a new page from it. **⌘⌥←** brings you back. You can also type \`[[\` to link a note you already have, like [[Home]].
 - **Link chats.** \`[[\` suggests your chats too. Chat links are red, and clicking one opens that exact chat or branch.
 - **Organize.** Drag notes into folders. Right-click a note or folder to rename, delete, or add to it.
 
