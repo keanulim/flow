@@ -1,4 +1,4 @@
-import type { EditorState, Extension, Range } from "@codemirror/state";
+import { type EditorState, type Extension, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { type LinkHost, refreshLinks } from "./wikilinks";
 
@@ -14,8 +14,9 @@ import { type LinkHost, refreshLinks } from "./wikilinks";
  *
  * Obsidian shows that as highlighted text with a footnote; GitHub as a
  * footnote. In Flow the markers hide (off the cursor's line), the words get a
- * highlighter look, clicking them pops the note up, and the notes sit at the
- * end of the file in small gray text, like footnotes.
+ * highlighter look, and clicking them pops the note up. The note lines at the
+ * end of the file are hidden; they show (as plain text) only if the cursor
+ * goes into them, e.g. ⌘↓ to the very end.
  *
  * The functions on plain text are separate from the editor, so they can be
  * tested (scripts/annotation-test.ts).
@@ -91,7 +92,8 @@ export function addAnnotation(doc: string, from: number, to: number, note: strin
     id,
     changes: [
       { from, to, insert: `==${text}==[^${id}]` },
-      { from: end, to: end, insert: gap + defLines(id, note) },
+      // Always a line after the notes: clicking below the text puts the cursor there, not in the (hidden) notes.
+      { from: end, to: end, insert: gap + defLines(id, note) + (doc.slice(end).includes("\n") ? "" : "\n") },
     ],
   };
 }
@@ -145,6 +147,7 @@ export function annotations(getHost: () => LinkHost): Extension[] {
         decos.push(Decoration.replace({}).range(r.textTo, r.to));
       }
     }
+    // Note lines the cursor is in show as plain text (the rest are hidden by `hideNotes`).
     for (const d of defs.values()) {
       for (let n = state.doc.lineAt(d.from).number; n <= state.doc.lineAt(d.to).number; n++) {
         decos.push(Decoration.line({ class: "cm-annot-def" }).range(state.doc.line(n).from));
@@ -152,6 +155,17 @@ export function annotations(getHost: () => LinkHost): Extension[] {
     }
     return Decoration.set(decos, true);
   };
+
+  /**
+   * Hide the note lines ("[^1]: …") and the blank lines just above them.
+   * Hiding whole lines changes the layout, which CodeMirror only allows from
+   * a state field (not a view plugin, like the highlights above).
+   */
+  const hideNotes = StateField.define<DecorationSet>({
+    create: (state) => hiddenNotes(state),
+    update: (value, tr) => (tr.docChanged || tr.selection ? hiddenNotes(tr.state) : value),
+    provide: (f) => EditorView.decorations.from(f),
+  });
 
   const plugin = ViewPlugin.fromClass(
     class {
@@ -190,5 +204,44 @@ export function annotations(getHost: () => LinkHost): Extension[] {
     ".cm-annot-def *": { color: "inherit" }, // the highlighter colors "[^1]:" as a link label
   });
 
-  return [plugin, clicks, theme];
+  return [plugin, hideNotes, clicks, theme];
+}
+
+/** Blocks of note lines to hide: runs of definitions (blank lines between them allowed), plus the blank lines before each run. */
+function hiddenNotes(state: EditorState): DecorationSet {
+  const { doc } = state;
+  const { defs } = parseAnnotations(doc.toString());
+  if (!defs.size) return Decoration.none;
+  // Line numbers of note lines, in order.
+  const noteLines = new Set<number>();
+  for (const d of defs.values()) for (let n = doc.lineAt(d.from).number; n <= doc.lineAt(d.to).number; n++) noteLines.add(n);
+  const blank = (n: number) => !doc.line(n).text.trim();
+  const blocks: [number, number][] = [];
+  for (const n of [...noteLines].sort((a, b) => a - b)) {
+    const last = blocks.at(-1);
+    // Same block if only blank lines lie between this and the previous note line.
+    let joined = false;
+    if (last) {
+      let k = last[1] + 1;
+      while (k < n && blank(k)) k++;
+      if (k === n) {
+        last[1] = n;
+        joined = true;
+      }
+    }
+    if (!joined) {
+      let first = n;
+      while (first > 1 && blank(first - 1)) first--; // take the blank lines above it too
+      blocks.push([first, n]);
+    }
+  }
+  const decos: Range<Decoration>[] = [];
+  for (const [first, last] of blocks) {
+    const from = doc.line(first).from;
+    const to = doc.line(last).to;
+    // The cursor is in it (e.g. ⌘↓ to the end): show it, so it can still be edited as text.
+    if (state.selection.ranges.some((r) => r.to >= from && r.from <= to)) continue;
+    decos.push(Decoration.replace({ block: true }).range(from, to));
+  }
+  return Decoration.set(decos);
 }

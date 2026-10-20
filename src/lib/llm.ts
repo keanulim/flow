@@ -3,7 +3,9 @@ import type { BuiltContext } from "./context";
 import { type EditInput, applyEdit } from "./note-edit";
 import { type ChatEvent, REFUSAL_NOTE, type Source, TRUNCATED_NOTE } from "./shared";
 
-export const MODEL = "claude-sonnet-5-5";
+// Everything runs on Haiku 5.5 (fast and cheap). To go back to Sonnet, set
+// MODEL to "claude-sonnet-5-5" and see the notes on WEB_TOOLS and fallbacks below.
+export const MODEL = "claude-haiku-5-5";
 /** For small, quick jobs like naming a chat. */
 export const FAST_MODEL = "claude-haiku-5-5";
 
@@ -38,12 +40,13 @@ let client: Anthropic | undefined;
 /**
  * Web tools run on Anthropic's servers: the model decides when to search or
  * read a page, and gets the results itself. Capped per reply, since each
- * search is billed. These versions filter results with code before they
- * reach the context ("dynamic filtering"), which keeps replies cheaper.
+ * search is billed. Sources come from the citations in the reply (or, with
+ * the newer dynamic-filtering versions on Sonnet/Opus, from its links).
  */
 const WEB_TOOLS = [
-  { type: "web_search_20260209" as const, name: "web_search" as const, max_uses: 5 },
-  { type: "web_fetch_20260209" as const, name: "web_fetch" as const, max_uses: 3 },
+  // The 20260209 versions (with dynamic filtering) are for Opus and Sonnet; Haiku uses these.
+  { type: "web_search_20250305" as const, name: "web_search" as const, max_uses: 5 },
+  { type: "web_fetch_20250910" as const, name: "web_fetch" as const, max_uses: 3 },
 ];
 
 const MAX_RESUMES = 4; // a long run of searches can pause the turn; resume at most this many times
@@ -73,10 +76,7 @@ async function* streamClaude(ctx: BuiltContext, { signal, webSearch }: StreamOpt
         cache_control: { type: "ephemeral" },
         // Adaptive thinking is on by default; effort is the speed/depth dial.
         output_config: { effort: "medium" },
-        // If a safety classifier declines, retry server-side on a suitable model
-        // instead of leaving the user with a dead end.
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
+        // (No server-side fallback: Haiku 5.5 doesn't have one. A declined reply ends with REFUSAL_NOTE.)
       },
       { signal }, // aborting cancels the HTTP request to the API
     );
@@ -276,8 +276,6 @@ export async function* streamCompletion({ system, prompt, maxTokens, mock, signa
       system,
       messages: [{ role: "user", content: prompt }],
       output_config: { effort: "low" }, // summarizing doesn't need deep thinking; low is faster and cheaper
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
     },
     { signal },
   );
@@ -413,8 +411,6 @@ export async function* streamNoteAssistant(
         messages,
         tools,
         output_config: { effort: "medium" },
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
       },
       { signal },
     );

@@ -32,6 +32,9 @@ const removed = apply(two, removeAnnotation(two, "1"));
 check("removing a note restores the words and deletes the note", removed.includes("KV store with") && !removed.includes("[^1]") && removed.includes("==bank system==[^2]"), true);
 check("removing both gives back the original text", apply(removed, removeAnnotation(removed, "2")).trimEnd(), doc.trimEnd());
 
+const bare = "No newline at the end";
+const c = addAnnotation(bare, 0, 2, "x")!;
+check("the notes are always followed by a line break", apply(bare, c.changes).endsWith("[^1]: x\n"), true);
 check("several lines can't be annotated", addAnnotation(doc, 0, doc.length, "x"), null);
 check("an empty note isn't added", addAnnotation(doc, at, at + 2, "  "), null);
 const code = "```\n==x==[^1]\n```\n";

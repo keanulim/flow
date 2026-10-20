@@ -77,7 +77,7 @@ Right-click handles the rest: renaming and deleting chats and files, linking a h
 
 ## Under the hood
 
-Built with Next.js 15, React 19, TypeScript, Tailwind 4, SQLite (better-sqlite3), CodeMirror 6 and the Anthropic SDK. Replies come from Claude Sonnet 5.5, and the quick jobs like titles go to Haiku.
+Built with Next.js 15, React 19, TypeScript, Tailwind 4, SQLite (better-sqlite3), CodeMirror 6 and the Anthropic SDK. Everything runs on Claude Haiku 5.5 (fast and cheap); switching to Sonnet is one line in `src/lib/llm.ts`.
 
 If you want to poke around:
 

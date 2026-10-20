@@ -37,7 +37,7 @@ An AI chat app built for staying in flow, plus an Obsidian-style notes app, in o
 
 **Stack:** Next.js 15 (App Router), React 19, TypeScript, Tailwind 4, SQLite (better-sqlite3), CodeMirror 6, the Anthropic SDK. About 9,000 lines.
 
-**Models:** replies, notes and the assistant use **Claude Sonnet 5.5** (`claude-sonnet-5-5`); small jobs like chat titles use **Claude Haiku 5.5** (`claude-haiku-5-5`). Both are set at the top of `src/lib/llm.ts`.
+**Models:** everything runs on **Claude Haiku 5.5** (`claude-haiku-5-5`): replies, notes, the assistant and titles. It's set at the top of `src/lib/llm.ts`. To switch back to Sonnet 5.5 for higher quality, change `MODEL` there; Sonnet can also use the newer web tools (dynamic filtering) and a server-side fallback when a reply is declined, which Haiku doesn't have.
 
 ---
 
@@ -291,7 +291,7 @@ Every color is a **CSS variable** (`--bg`, `--fg`, `--muted`, `--line`, `--accen
 - The live-preview editor (one editor, no edit/preview toggle) with autosave 600ms after you stop typing.
 - `[[links]]` with suggestions, chat links, web links, and the link picker for selected text.
 - Toggles, task lists, tables, code blocks, math, embedded images.
-- **Notes on text:** right-click selected words → Add note…; click the highlighted words later to see, edit or remove it. Stored as Obsidian highlight + standard footnote, so it stays plain Markdown.
+- **Notes on text:** right-click selected words → Add note…; click the highlighted words later to see, edit or remove it. Stored as Obsidian highlight + standard footnote, so it stays plain Markdown. The note lines at the end of the file are hidden in the editor (they show as text only if the cursor goes into them).
 - **Home:** a page of its own (the sidebar is empty there), seeded with a welcome guide.
 - A "← back" trail when following links (⌘⌥←).
 
@@ -483,7 +483,7 @@ Real bugs from building this, with what each one teaches.
 | Oct 15 | Notes workspace; chats to notes; live note writing; chat links; one rendered editor; themes; streaming fade-in; hooks and components split; AI titles; chat rename and delete. |
 | Oct 17 | Note assistant (edits, reads notes, web search, attachments); chat web search; uploads; math; images in notes; page creation; sidebar redesign; Neon theme; README rewrite. |
 | Oct 19 | Link selected words to pages, chats or web pages; chat fade. |
-| Oct 20 | Notes on text: highlight words, attach a note, click to see it. |
+| Oct 20 | Notes on text: highlight words, attach a note, click to see it. Everything switched to Haiku 5.5. |
 | | *Add new entries here.* |
 
 ---
