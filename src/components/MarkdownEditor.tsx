@@ -8,6 +8,8 @@ import { withTrailingLine } from "@/lib/toggles";
 import { type LinkHost, linkMarkdown, pageName, refreshLinks } from "@/lib/wikilinks";
 import ContextMenu from "./ContextMenu";
 import LinkPicker, { type LinkChoice } from "./LinkPicker";
+import AnnotationPopup from "./AnnotationPopup";
+import { addAnnotation, parseAnnotations, removeAnnotation, type TextChange, updateAnnotation } from "@/lib/annotations";
 
 export type MarkdownEditorHandle = { focus: () => void };
 
@@ -31,10 +33,15 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
   const view = useRef<EditorView | null>(null);
   const callbacks = useRef({ onChange, onBlur, links });
   callbacks.current = { onChange, onBlur, links };
-  // Right-click on selected text (one line): a menu with "Link to…".
+  // Right-click on selected text (one line): a menu with "Link to…" and "Add note…".
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   // Linking the selection (⌘K or that menu): the picker, under the selected text.
   const [picker, setPicker] = useState<{ x: number; y: number; from: number; to: number; text: string } | null>(null);
+  // A note on text: writing a new one for the selection, or one that was clicked.
+  const [annot, setAnnot] = useState<
+    { mode: "new"; x: number; y: number; from: number; to: number } | { mode: "view"; x: number; y: number; id: string } | null
+  >(null);
+  const openAnnotation = useCallback((id: string, rect: DOMRect) => setAnnot({ mode: "view", x: rect.left, y: rect.bottom + 6, id }), []);
   const openPicker = useCallback((from: number, to: number) => {
     const v = view.current;
     const at = v?.coordsAtPos(from);
@@ -48,7 +55,7 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
       state: EditorState.create({
         doc: withTrailingLine(initial),
         extensions: [
-          liveMarkdown(() => ({ ...callbacks.current.links, pickLink: (from: number, to: number) => openPicker(from, to) })),
+          liveMarkdown(() => ({ ...callbacks.current.links, pickLink: (from: number, to: number) => openPicker(from, to), openAnnotation })),
           ...(live !== undefined ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) callbacks.current.onChange(u.state.doc.toString());
@@ -105,6 +112,25 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
     if (sel && !sel.empty) openPicker(sel.from, sel.to);
   };
 
+  /** Right-click → Add note…: a note about the selected words. */
+  const noteSelection = () => {
+    const v = view.current;
+    const sel = v?.state.selection.main;
+    const at = sel && v?.coordsAtPos(sel.from);
+    if (!v || !sel || sel.empty || !at) return;
+    setAnnot({ mode: "new", x: at.left, y: at.bottom + 6, from: sel.from, to: sel.to });
+  };
+
+  const applyChanges = (changes: TextChange[] | null) => {
+    const v = view.current;
+    if (v && changes?.length) v.dispatch({ changes, userEvent: "input.annotate" });
+  };
+
+  const closeAnnotation = useCallback(() => {
+    setAnnot(null);
+    view.current?.focus();
+  }, []);
+
   const closePicker = useCallback(() => {
     setPicker(null);
     view.current?.focus();
@@ -133,7 +159,42 @@ export default function MarkdownEditor({ initial, onChange, onBlur, links, links
   return (
     <>
       <div ref={host} className="h-full" />
-      {menu && <ContextMenu x={menu.x} y={menu.y} onClose={closeMenu} items={[{ label: "Link to…", run: linkSelection }]} />}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={closeMenu}
+          items={[
+            { label: "Link to…", run: linkSelection },
+            { label: "Add note…", run: noteSelection },
+          ]}
+        />
+      )}
+      {annot && view.current && (
+        <AnnotationPopup
+          // A fresh popup per note, so its text box starts from the right note.
+          key={annot.mode === "view" ? annot.id : "new"}
+          x={annot.x}
+          y={annot.y}
+          editing={annot.mode === "new"}
+          readOnly={live !== undefined}
+          note={annot.mode === "view" ? (parseAnnotations(view.current.state.doc.toString()).defs.get(annot.id)?.text ?? "") : ""}
+          onSave={(note) => {
+            const doc = view.current!.state.doc.toString();
+            applyChanges(annot.mode === "new" ? (addAnnotation(doc, annot.from, annot.to, note)?.changes ?? null) : updateAnnotation(doc, annot.id, note));
+            closeAnnotation();
+          }}
+          onRemove={
+            annot.mode === "view"
+              ? () => {
+                  applyChanges(removeAnnotation(view.current!.state.doc.toString(), annot.id));
+                  closeAnnotation();
+                }
+              : undefined
+          }
+          onClose={closeAnnotation}
+        />
+      )}
       {picker && (
         <LinkPicker
           x={picker.x}

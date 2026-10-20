@@ -39,6 +39,8 @@ export type LinkHost = {
   saveImage: (file: File) => Promise<string | null>;
   /** ⌘K on selected text: let the user pick what to link it to (the editor shows a picker). Without it, ⌘K links a page of that name. */
   pickLink?: (from: number, to: number) => void;
+  /** Clicked annotated words (see annotations.ts): show note `id` next to them. */
+  openAnnotation?: (id: string, rect: DOMRect) => void;
 };
 
 export const CHAT_PREFIX = "chat:";

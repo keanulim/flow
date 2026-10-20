@@ -7,6 +7,7 @@ import { tags } from "@lezer/highlight";
 import katex from "katex";
 import { DISPLAY_LINE, DISPLAY_OPEN, displayClose, findInlineMath } from "./math";
 import { indent, parseToggles, toggles } from "./toggles";
+import { annotations } from "./annotations";
 import { type LinkHost, wikilinks } from "./wikilinks";
 
 /**
@@ -468,6 +469,7 @@ const theme = EditorView.theme({
 export function liveMarkdown(getLinkHost?: () => LinkHost, placeholderText = "Start writing…"): Extension[] {
   return [
     ...(getLinkHost ? wikilinks(getLinkHost) : []), // [[links]] between notes
+    ...(getLinkHost ? annotations(getLinkHost) : []), // ==notes on text==[^1]
     // GFM, minus blockquotes. Enter still continues lists.
     markdown({ base: markdownLanguage, extensions: { remove: ["Blockquote"] } }),
     syntaxHighlighting(highlight),

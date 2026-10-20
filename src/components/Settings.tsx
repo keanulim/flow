@@ -34,6 +34,7 @@ const SHORTCUTS: { section: string; items: [keys: string, label: string][] }[] =
       ["#  ##  ###", "Type at the start of a line, then a space, for a heading"],
       [`${MOD}K`, "On selected text: link it to a page, a chat or a web address, or make a new page (same as right-click → Link to…). On a link: open it"],
       ["[[", "Link to a page or a chat; suggests your notes and chats"],
+      ["Right-click → Add note…", "On selected text: write a note about it. Click the highlighted words to see, edit or remove it"],
       [`${MOD}⌥←`, "Back to the note you came from"],
       ["/>", "At the start of a line: make it a toggle (collapsible)"],
       ["↵ on a title", "Open toggle: new first line inside. Closed: new line after it"],
