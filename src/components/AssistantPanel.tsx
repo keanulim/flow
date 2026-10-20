@@ -104,6 +104,7 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
     const id = crypto.randomUUID();
     if (reply !== null) setTurns((t) => [...(t ?? []), { id, role: "assistant", content: reply }]);
     if (changed || created.length) setUndo({ turnId: id, before: changed ? before : null, created });
+    if (changed) onFilesChanged(); // an image the edit removed may have gone to the trash
     if (created.length) setCreatedBy((c) => ({ ...c, [id]: created }));
     setCreating([]);
     setStreaming(null);

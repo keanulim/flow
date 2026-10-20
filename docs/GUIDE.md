@@ -265,11 +265,11 @@ Every file operation goes through `resolveInVault`, which turns a path from the 
 Every color is a **CSS variable** (`--bg`, `--fg`, `--muted`, `--line`, `--accent`, the `--code-*` colors, and so on). A theme is just a block that redefines them under `[data-theme="…"]`. Tailwind classes like `bg-bg` and `text-muted` point at those variables. The themes:
 
 - **Light** (the default)
-- **Paper** (warm beige)
 - **Dark**
 - **Neon** (a high-contrast dark theme)
+- **Nord**, **Mocha** (Catppuccin) and **Rosé** (Rosé Pine Dawn, light): based on popular editor color schemes
 
-**No flash on reload:** a tiny inline script in `<head>` reads the saved theme from `localStorage` and sets `data-theme` **before the page paints**. Without it, a dark-theme user would see a white flash on every load. Even the file tree's folder arrow changes per theme in CSS alone: sharp in Light and Dark, soft in Paper, pixelated in Neon.
+**No flash on reload:** a tiny inline script in `<head>` reads the saved theme from `localStorage` and sets `data-theme` **before the page paints**. Without it, a dark-theme user would see a white flash on every load. Even the file tree's folder arrow changes per theme in CSS alone: soft in Mocha and Rosé, pixelated in Neon, sharp in the rest.
 
 ---
 
@@ -287,7 +287,8 @@ Every color is a **CSS variable** (`--bg`, `--fg`, `--muted`, `--line`, `--accen
 - A fade above the message box.
 
 ### Notes
-- An Obsidian-compatible vault of plain `.md` files, with a folder tree: drag to move, right-click to rename or delete.
+- An Obsidian-compatible vault of plain `.md` files, with a folder tree: drag to arrange (a line shows where it'll go; a folder's middle drops into it; the list scrolls near its edges), right-click to rename or delete. Select several: click one, shift-click another for everything between (⌘-click adds or removes one); drag any of them to move them all, or right-click → Delete N items. Your order is saved in `.flow/order.json` inside the vault; folders never arranged sort folders first, then A to Z.
+- Images aren't listed in the sidebar (they live in the vault for the notes that show them). Images removed from a page go to the trash when no other note shows them (undo brings them back).
 - The live-preview editor (one editor, no edit/preview toggle) with autosave 600ms after you stop typing.
 - `[[links]]` with suggestions, chat links, web links, and the link picker for selected text.
 - Toggles, task lists, tables, code blocks, math, embedded images.
@@ -316,6 +317,7 @@ All of this is git-ignored, so your data never ends up on GitHub.
 | Chats, messages, note-assistant conversations | `data/flow.db` (SQLite) |
 | Notes and their images | `data/vault/` (or `FLOW_VAULT_PATH`) |
 | Deleted notes and images | `data/vault/.trash/` |
+| The order you've arranged files in | `data/vault/.flow/order.json` |
 | Chat attachments | `data/attachments/` |
 | Theme, web search switch, mock mode, sidebar split, folders open | browser `localStorage` (`flow.*`) |
 
@@ -344,6 +346,7 @@ All of this is git-ignored, so your data never ends up on GitHub.
 | `vault.ts` | The notes folder: list, read, write, create, move, trash, images, and the security boundary. |
 | `notes.ts` | Notes by name: listing, `[[link]]` and embed resolution, linked pages. Shared by the editor and the assistant. |
 | `note-edit.ts` | Applies the text editor tool's commands to a note in memory. |
+| `note-images.ts` | Saving a note, and moving images it no longer shows to the trash (and back on undo). |
 | `attachments.ts` | Chat attachments on disk, as model content blocks, and pruning. |
 | `upload.ts` | Browser side: shrink images, upload. |
 | `chat-stream.ts` | Browser side: POST and read the NDJSON stream. |
@@ -385,7 +388,6 @@ All of this is git-ignored, so your data never ends up on GitHub.
 | `LinkPicker.tsx` | Link selected text to a page, chat or web address. |
 | `AnnotationPopup.tsx` | Writing, showing, editing and removing a note on text. |
 | `AssistantPanel.tsx` | The note assistant. |
-| `ImageView.tsx` | Viewing an image from the file tree. |
 | `Settings.tsx` | Themes, the web search switch, shortcuts. |
 | `ContextMenu.tsx`, `RenameInput.tsx`, `LambdaMark.tsx` | Small shared pieces. |
 
@@ -427,6 +429,8 @@ Plain scripts run with `tsx`; each prints PASS or FAIL per check.
 | `test:create-note` | create_note never overwrites and can't escape the vault (in a temporary vault). |
 | `test:links` | The Markdown that linking selected text writes, including awkward characters. |
 | `test:annotations` | Adding, numbering, editing and removing notes on text; multi-line notes; code left alone. |
+| `test:note-images` | Images removed from a page go to the trash unless another note shows them; undo and cut-and-paste restore them. |
+| `test:order` | Arranging files: saved order, moves between folders, renames keeping their spot, deletes, nothing outside the vault. |
 
 Browser checks happen in the preview with **mock mode** (free). Real API checks are kept to single, cheap requests.
 
@@ -448,6 +452,9 @@ Real bugs from building this, with what each one teaches.
 | `../../evil` produced a hidden file | Leading dots weren't stripped after cleaning | Security tests should check the *result* is sensible, not just "didn't escape". |
 | Rotating a 4×7 pixel arrow blurred it | Rotation put its center on half a pixel | Pixel art needs whole-pixel positions; draw both states instead of rotating. |
 | Web search results had no citations | Dynamic filtering runs search from code, so no citation markers | Derive sources from links that match pages actually seen. |
+| Math in chats: fractions overlapped, subscripts full-size | Two KaTeX versions: chats rendered with 0.16 (inside rehype-katex), the page loaded 0.19's CSS, which renamed `.sizing` to `.katex-sizing` | **One version of a library everywhere** (`npm ls <pkg>` shows duplicates). |
+| Hats (θ̂) drawn beside Greek letters | Inter has no combining accents, so the hat came from a fallback font that can't place it on Greek | Measure which font draws a character (`unicodeRange`); draw just those characters in a font that can. |
+| Example `![[photo.png]]` in inline code counted as a real embed | Embeds were found everywhere except code *blocks* | Treat inline code like code blocks wherever syntax is detected. |
 | A formatter rewrote a whole file | It used a different style than the project | Don't run tools the project doesn't use; keep diffs to what changed. |
 
 **General habits that paid off:**
@@ -483,7 +490,7 @@ Real bugs from building this, with what each one teaches.
 | Oct 15 | Notes workspace; chats to notes; live note writing; chat links; one rendered editor; themes; streaming fade-in; hooks and components split; AI titles; chat rename and delete. |
 | Oct 17 | Note assistant (edits, reads notes, web search, attachments); chat web search; uploads; math; images in notes; page creation; sidebar redesign; Neon theme; README rewrite. |
 | Oct 19 | Link selected words to pages, chats or web pages; chat fade. |
-| Oct 20 | Notes on text: highlight words, attach a note, click to see it. Everything switched to Haiku 5.5. |
+| Oct 20 | Notes on text: highlight words, attach a note, click to see it. Everything switched to Haiku 5.5. Fixed math rendering in chats and accented letters (θ̂). Images removed from pages go to the trash. Drag to arrange files. |
 | | *Add new entries here.* |
 
 ---

@@ -55,31 +55,6 @@
   --code-comment: #78716c;
 }
 
-[data-theme="paper"] {
-  color-scheme: light;
-  --bg: #ece4d4;
-  --panel: #e3d9c6;
-  --fg: #2a241c;
-  --muted: #6f6353;
-  --line: #d4c8b1;
-  --line-strong: #a8977b;
-  --hover: #ddd2bd;
-  --user: #ddd1bb;
-  --accent: #5345b8;
-  --accent-soft: #d8d0e4;
-  --chat-link: #cc4236;
-  --map-path: #9a8c73;
-  --map-here: #6f6353;
-  --map-node: #cbbea5;
-  --danger: #ab2f1d;
-  --code-keyword: #6425cc;
-  --code-string: #48740e;
-  --code-number: #923110;
-  --code-title: #1d3ea6;
-  --code-type: #14596f;
-  --code-comment: #968a75;
-}
-
 /* Neon (a fun, high-contrast theme): near-black, bright text, hot pink accents, candy-colored code. */
 [data-theme="neon"] {
   color-scheme: dark;
@@ -106,6 +81,85 @@
   --code-comment: #6c6ba0;
 }
 
+/* Themes inspired by popular editor color schemes (their palettes, mapped onto Flow's tokens). */
+
+/* Nord: arctic, north-bluish (nordtheme.com). */
+[data-theme="nord"] {
+  color-scheme: dark;
+  --bg: #2e3440;
+  --panel: #292e39;
+  --fg: #eceff4;
+  --muted: #a3acbd;
+  --line: #3b4252;
+  --line-strong: #5e6a80;
+  --hover: #3b4252;
+  --user: #3b4252;
+  --accent: #88c0d0;
+  --accent-soft: #2f4652;
+  --chat-link: #bf616a;
+  --map-path: #81a1c1;
+  --map-here: #88c0d0;
+  --map-node: #4c566a;
+  --danger: #bf616a;
+  --code-keyword: #81a1c1;
+  --code-string: #a3be8c;
+  --code-number: #b48ead;
+  --code-title: #88c0d0;
+  --code-type: #8fbcbb;
+  --code-comment: #6c7a91;
+}
+
+/* Mocha: Catppuccin's soothing pastel dark (catppuccin.com). */
+[data-theme="mocha"] {
+  color-scheme: dark;
+  --bg: #1e1e2e;
+  --panel: #181825;
+  --fg: #cdd6f4;
+  --muted: #a6adc8;
+  --line: #313244;
+  --line-strong: #585b70;
+  --hover: #313244;
+  --user: #313244;
+  --accent: #cba6f7;
+  --accent-soft: #3a2f52;
+  --chat-link: #f38ba8;
+  --map-path: #89b4fa;
+  --map-here: #cba6f7;
+  --map-node: #45475a;
+  --danger: #f38ba8;
+  --code-keyword: #cba6f7;
+  --code-string: #a6e3a1;
+  --code-number: #fab387;
+  --code-title: #89b4fa;
+  --code-type: #f9e2af;
+  --code-comment: #7f849c;
+}
+
+/* Rosé: Rosé Pine Dawn, soho vibes for the light (rosepinetheme.com). */
+[data-theme="rose"] {
+  color-scheme: light;
+  --bg: #faf4ed;
+  --panel: #f2e9e1;
+  --fg: #464261;
+  --muted: #6b6787; /* Rosé Pine's "subtle", a touch darker so small gray text stays readable */
+  --line: #dfdad9;
+  --line-strong: #b4adb7;
+  --hover: #f4ede8;
+  --user: #f2e9e1;
+  --accent: #907aa9;
+  --accent-soft: #ebe1ef;
+  --chat-link: #b4637a;
+  --map-path: #d7827e;
+  --map-here: #286983;
+  --map-node: #dfdad9;
+  --danger: #b4637a;
+  --code-keyword: #286983;
+  --code-string: #b4637a;
+  --code-number: #d7827e;
+  --code-title: #907aa9;
+  --code-type: #56949f;
+  --code-comment: #9893a5;
+}
 
 @theme inline {
   --color-bg: var(--bg);
@@ -174,6 +228,12 @@ body {
 
 /* The file tree's folder arrow (FileTree.tsx Chevron): one style per theme. */
 .chevron-soft, .chevron-pixel { display: none; }
-[data-theme="paper"] .chevron-sharp, [data-theme="neon"] .chevron-sharp { display: none; }
-[data-theme="paper"] .chevron-soft { display: block; }
+/* Soft: the gentle themes. Pixel: Neon. Everything else: sharp. */
+:is([data-theme="mocha"], [data-theme="rose"]) .chevron-sharp { display: none; }
+:is([data-theme="mocha"], [data-theme="rose"]) .chevron-soft { display: block; }
+[data-theme="neon"] .chevron-sharp { display: none; }
 [data-theme="neon"] .chevron-pixel { display: block; }
+
+/* A letter with a combining accent typed as text (θ̂, μ̃): drawn in a font that puts
+   the accent over the letter. Inter has no combining accents. See lib/accents.ts. */
+.accented { font-family: "STIX Two Text", "Cambria Math", KaTeX_Main, serif; }

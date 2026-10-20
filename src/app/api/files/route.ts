@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteNoteChats, moveNoteChats } from "@/lib/db";
-import { createEntry, listVault, moveEntry, trashEntry, VaultError } from "@/lib/vault";
+import { createEntry, listVault, moveEntry, placeEntry, trashEntry, VaultError } from "@/lib/vault";
 
 /** Turn vault errors into HTTP errors; anything else is a 500. */
 async function handle(fn: () => Promise<unknown>) {
@@ -23,12 +23,16 @@ export async function POST(req: Request) {
   return handle(async () => ({ path: await createEntry(parent, name, type === "folder" ? "folder" : "file") }));
 }
 
-/** Rename or move: { from, to }. Returns { path }. */
+/**
+ * Rename or move: { from, to }. Or put it at a spot (drag to arrange):
+ * { from, folder, before } = in `folder`, just before the item named `before`
+ * (null: at the end). Returns { path }.
+ */
 export async function PATCH(req: Request) {
-  const { from, to } = (await req.json()) as { from: string; to: string };
+  const { from, to, folder, before = null } = (await req.json()) as { from: string; to?: string; folder?: string; before?: string | null };
   return handle(async () => {
-    const path = await moveEntry(from, to);
-    moveNoteChats(from, path); // a note's assistant conversation follows it
+    const path = typeof folder === "string" ? await placeEntry(from, folder, before) : await moveEntry(from, to ?? "");
+    if (path !== from) moveNoteChats(from, path); // a note's assistant conversation follows it
     return { path };
   });
 }
@@ -39,5 +43,6 @@ export async function DELETE(req: Request) {
   return handle(async () => {
     await trashEntry(p);
     deleteNoteChats(p);
+    return undefined;
   });
 }

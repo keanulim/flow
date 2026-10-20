@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { readNote, VaultError, writeNote } from "@/lib/vault";
+import { saveNote } from "@/lib/note-images";
+import { readNote, VaultError } from "@/lib/vault";
 
 function fail(e: unknown) {
   if (e instanceof VaultError) return NextResponse.json({ error: e.message }, { status: e.status });
@@ -16,13 +17,16 @@ export async function GET(req: Request) {
   }
 }
 
-/** Save a note: { path, content } */
+/**
+ * Save a note: { path, content }. Images it no longer shows (and no other note
+ * does) go to the trash; returns { removed, restored } image paths, so the
+ * file tree can refresh.
+ */
 export async function PUT(req: Request) {
   try {
     const { path, content } = (await req.json()) as { path: string; content: string };
     if (typeof content !== "string") throw new VaultError("Missing content");
-    await writeNote(path, content);
-    return new NextResponse(null, { status: 204 });
+    return NextResponse.json(await saveNote(path, content));
   } catch (e) {
     return fail(e);
   }

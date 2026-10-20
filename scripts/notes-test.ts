@@ -1,5 +1,5 @@
 // Resolving [[links]] to notes (shared by the editor and the note assistant). Run: npm run test:notes
-import { linkedPages, listNotes, listOtherFiles, resolveFile, resolveNote, type NoteInfo } from "../src/lib/notes";
+import { embeddedImages, linkedPages, listNotes, listOtherFiles, resolveFile, resolveNote, type NoteInfo } from "../src/lib/notes";
 let fails = 0;
 const check = (label: string, ok: boolean, detail = "") => { console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? "  " + detail : ""}`); if (!ok) fails++; };
 const notes: NoteInfo[] = [
@@ -26,5 +26,7 @@ check("embed: by full path, any case", resolveFile("school/diagram.png", null, i
 check("embed: missing", resolveFile("nope.png", null, images) === null);
 const tree = [{ type: "folder" as const, name: "A", path: "A", children: [{ type: "file" as const, name: "n.md", path: "A/n.md" }, { type: "file" as const, name: "p.png", path: "A/p.png" }] }];
 check("notes and images are listed apart", listNotes(tree).map((n) => n.path).join() === "A/n.md" && listOtherFiles(tree).map((n) => n.path).join() === "A/p.png");
+check("embeds in `inline code` are examples, not real", JSON.stringify(embeddedImages("see `![[photo.png]]` and ![[real.png]]")) === JSON.stringify(["real.png"]));
+check("links in `inline code` are examples too", JSON.stringify(linkedPages("write `[[Page]]` or [[Real]]")) === JSON.stringify(["Real"]));
 console.log(fails ? `\n${fails} FAILED` : "\nall passed");
 process.exit(fails ? 1 : 0);

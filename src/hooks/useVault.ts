@@ -184,21 +184,43 @@ export function useVault(report: (e: unknown) => void) {
     [moveEntryTo, files],
   );
 
-  const moveEntry = useCallback(
-    (path: string, toFolder: string) => moveEntryTo(path, (toFolder ? toFolder + "/" : "") + path.split("/").pop()),
-    [moveEntryTo],
+  /**
+   * Drag to arrange: put entries in `folder`, just before the item named
+   * `before` (null = at the end), keeping their order. One at a time on the
+   * server, each before the same item, so they end up together in order.
+   */
+  const placeEntries = useCallback(
+    async (froms: string[], folder: string, before: string | null) => {
+      await editor.current?.flush(); // save pending edits under the old path first
+      for (const from of froms) {
+        try {
+          const { path } = (await (
+            await api("/api/files", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from, folder, before }) })
+          ).json()) as { path: string };
+          setOpenNote((open) => (open === from ? path : open?.startsWith(from + "/") ? path + open.slice(from.length) : open));
+        } catch (e) {
+          report(e);
+          break; // e.g. a name already taken there: stop rather than half-scatter the rest
+        }
+      }
+      await loadFiles();
+    },
+    [loadFiles, report],
   );
 
-  /** Move to the vault's .trash. */
-  const deleteEntry = useCallback(
-    async (path: string) => {
+  /** Move entries to the vault's .trash. */
+  const deleteEntries = useCallback(
+    async (paths: string[]) => {
+      const inside = (open: string | null, p: string) => !!open && (open === p || open.startsWith(p + "/"));
       // Deleting the open note (or its folder): don't try to save it afterwards.
-      if (openNote && (openNote === path || openNote.startsWith(path + "/"))) editor.current?.discard();
-      try {
-        await api(`/api/files?path=${encodeURIComponent(path)}`, { method: "DELETE" });
-        setOpenNote((open) => (open === path || open?.startsWith(path + "/") ? null : open));
-      } catch (e) {
-        report(e);
+      if (paths.some((p) => inside(openNote, p))) editor.current?.discard();
+      for (const path of paths) {
+        try {
+          await api(`/api/files?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+          setOpenNote((open) => (inside(open, path) ? null : open));
+        } catch (e) {
+          report(e);
+        }
       }
       await loadFiles();
     },
@@ -221,7 +243,7 @@ export function useVault(report: (e: unknown) => void) {
     goToNote,
     createEntry,
     renameEntry,
-    moveEntry,
-    deleteEntry,
+    placeEntries,
+    deleteEntries,
   };
 }

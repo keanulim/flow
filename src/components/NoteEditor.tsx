@@ -23,6 +23,8 @@ type Props = {
   live?: string;
   /** What to call the live writing in the header ("Writing from chat…", "AI is editing…"). */
   liveLabel?: string;
+  /** Saving moved images to the trash or back (the file tree should refresh). */
+  onFilesChanged?: () => void;
   ref?: React.Ref<NoteEditorHandle>;
 };
 
@@ -33,7 +35,7 @@ const SAVE_DELAY = 600; // ms after the last keystroke
  * and immediately when the note is switched away from or about to be moved.
  * There's one view, as in Notion: the editor itself renders the Markdown.
  */
-export default function NoteEditor({ path, onError, links, linksVersion, back, live, liveLabel = "Writing…", ref }: Props) {
+export default function NoteEditor({ path, onError, links, linksVersion, back, live, liveLabel = "Writing…", onFilesChanged, ref }: Props) {
   const [content, setContent] = useState<string | null>(null); // null = loading
   const [status, setStatus] = useState<"saved" | "unsaved" | "saving" | "error">("saved");
   const latest = useRef(""); // newest text, for saves that run after a render
@@ -48,19 +50,22 @@ export default function NoteEditor({ path, onError, links, linksVersion, back, l
     dirty.current = false;
     setStatus("saving");
     try {
-      await api("/api/files/content", {
+      const res = await api("/api/files/content", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path, content: latest.current }),
         keepalive: true, // let the save finish even if the page is closing
       });
       setStatus((s) => (s === "saving" ? "saved" : s));
+      // An image removed from the page went to the trash (or came back on undo): refresh the file tree.
+      const images = (await res.json().catch(() => null)) as { removed?: string[]; restored?: string[] } | null;
+      if (images?.removed?.length || images?.restored?.length) onFilesChanged?.();
     } catch (e) {
       dirty.current = true; // keep the edits marked unsaved so the next save retries
       setStatus("error");
       onError(e);
     }
-  }, [path, onError]);
+  }, [path, onError, onFilesChanged]);
 
   useImperativeHandle(
     ref,

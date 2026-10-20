@@ -1,6 +1,7 @@
 import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { type EditorState, type Extension, Prec, type Range, StateEffect } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
+import { maskInlineCode } from "./notes";
 
 /**
  * Links between notes, Obsidian style: `[[Page name]]` or `[[Page name|shown text]]`.
@@ -89,17 +90,18 @@ function scan(state: EditorState): { pages: Found[]; chats: FoundChat[]; embeds:
     const line = state.doc.line(n);
     if (FENCE.test(line.text)) inFence = !inFence;
     if (inFence || FENCE.test(line.text)) continue;
-    for (const m of line.text.matchAll(LINK)) {
+    const text = maskInlineCode(line.text); // links in `code` are examples
+    for (const m of text.matchAll(LINK)) {
       const from = line.from + m.index!;
       const to = from + m[0].length;
       const labelFrom = m[2] !== undefined ? from + 2 + m[1].length + 1 : from + 2;
       pages.push({ from, to, target: linkTarget(m[1]), labelFrom, labelTo: to - 2 });
     }
-    for (const m of line.text.matchAll(CHAT_LINK)) {
+    for (const m of text.matchAll(CHAT_LINK)) {
       const from = line.from + m.index!;
       chats.push({ from, to: from + m[0].length, id: m[2], labelFrom: from + 1, labelTo: from + 1 + m[1].length });
     }
-    for (const m of line.text.matchAll(EMBED)) {
+    for (const m of text.matchAll(EMBED)) {
       const from = line.from + m.index!;
       const width = /^\s*\d+\s*$/.test(m[2] ?? "") ? Number(m[2]) : null;
       embeds.push({ from, to: from + m[0].length, target: m[1].trim(), width });

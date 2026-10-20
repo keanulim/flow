@@ -12,32 +12,44 @@ type Props = {
   onOpen: (path: string) => void;
   onCreate: (parent: string, type: "file" | "folder") => Promise<string | null>; // returns the new path
   onRename: (path: string, newName: string) => Promise<void>;
-  onMove: (path: string, toFolder: string) => Promise<void>;
-  onDelete: (path: string) => Promise<void>;
+  /** Put entries in `folder` ("" = top level), just before the item named `before` (null = at the end), in this order. */
+  onPlace: (paths: string[], folder: string, before: string | null) => Promise<void>;
+  /** Move entries to the trash. */
+  onDelete: (paths: string[]) => Promise<void>;
 };
 
 const EXPANDED_KEY = "flow.files.expanded";
 const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
-/** Notes and images are shown without their ending; an image gets it as a badge instead (like Obsidian). */
-const label = (e: VaultEntry) => (e.type === "file" ? e.name.replace(/\.[^.]+$/, "") : e.name);
-const badge = (e: VaultEntry) => (e.type === "file" && !/\.md$/i.test(e.name) ? e.name.split(".").pop()!.toUpperCase() : null);
+/** Notes are shown without their .md ending. */
+const label = (e: VaultEntry) => (e.type === "file" ? e.name.replace(/\.md$/i, "") : e.name);
 
 /**
- * The vault as a folder tree, Obsidian style: click to open, drag onto a folder
- * (or the empty area for the top level) to move. Right-click for rename and
+ * The vault's notes as a folder tree (images aren't listed), Obsidian style: click to open, drag to arrange
+ * (between rows, or into a folder; the empty area is the end of the top level). Right-click for rename and
  * delete (to the vault's .trash), and on folders or the empty area, new note /
  * new folder. Clicking a folder selects it as the
  * place new notes and folders go; each folder also has its own "+".
+ *
+ * Several at once: click one, then shift-click another to select everything
+ * between them (as shown, open folders' contents included), or ⌘/Ctrl-click
+ * to add or remove one. Drag any selected row to move them all; right-click
+ * one to delete them all. Esc or a click on the empty area clears it.
  */
-export default function FileTree({ entries, activePath, filter, onOpen, onCreate, onRename, onMove, onDelete }: Props) {
+export default function FileTree({ entries: all, activePath, filter, onOpen, onCreate, onRename, onPlace, onDelete }: Props) {
+  // Notes and folders only: images live in the vault for the notes that show them, but aren't listed.
+  const entries = useMemo(() => notesOnly(all), [all]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<string | null>(null); // folder path, "" = top level
+  // While dragging: a line above/below a row (where it'll go), or a folder it'll go into ("" = the top level).
+  const [dropTarget, setDropTarget] = useState<Drop | null>(null);
   // Where new items go: a clicked folder, "" for the top level, or null = follow the open note.
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [ghost, setGhost] = useState<{ name: string; x: number; y: number } | null>(null);
   // Right-click menu: for an entry, or (entry null) for the empty area = the top level.
   const [menu, setMenu] = useState<{ entry: VaultEntry | null; x: number; y: number } | null>(null);
+  // Several rows selected at once (shift-click a range, ⌘-click one more); `anchor` is where a range starts.
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const anchor = useRef<string | null>(null);
 
   // Remember open folders across visits (read after mount: no localStorage on the server).
   useEffect(() => {
@@ -74,7 +86,44 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
 
   const remove = (e: VaultEntry) => {
     if (e.type === "folder" && e.children.length && !confirm(`Move the folder “${e.name}” and everything in it to the trash?`)) return;
-    void onDelete(e.path);
+    void onDelete([e.path]);
+  };
+
+  /** The rows as shown, top to bottom (open folders' contents included): the order a shift-click range follows. */
+  const shown = useMemo(() => visibleRows(entries, expanded), [entries, expanded]);
+
+  /** Click (select this one), shift-click (everything from the anchor to here), ⌘-click (add or remove this one). */
+  const select = (path: string, ev: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
+    const from = anchor.current ?? activePath; // no row clicked yet: the range starts at the open note
+    if (ev.shiftKey && from && shown.includes(from)) {
+      const [a, b] = [shown.indexOf(from), shown.indexOf(path)].sort((x, y) => x - y);
+      setSelection(new Set(shown.slice(a, b + 1)));
+      return "range";
+    }
+    if (ev.metaKey || ev.ctrlKey) {
+      setSelection((sel) => {
+        const next = new Set(sel.size ? sel : activePath ? [activePath] : []);
+        if (next.has(path)) next.delete(path);
+        else next.add(path);
+        return next;
+      });
+      anchor.current = path;
+      return "toggle";
+    }
+    setSelection(new Set([path]));
+    anchor.current = path;
+    return "one";
+  };
+  const multi = selection.size > 1;
+
+  /** Right-click → Delete N items. */
+  const removeSelected = () => {
+    const paths = topLevel(selection, shown);
+    const folders = paths.filter((p) => entryAt(entries, p)?.type === "folder").length;
+    const what = `${items(paths.length)}${folders ? ` (${folders === 1 ? "a folder" : "folders"} with everything in ${folders === 1 ? "it" : "them"})` : ""}`;
+    if (!confirm(`Move ${what} to the trash?`)) return;
+    setSelection(new Set());
+    void onDelete(paths);
   };
 
   // Search: a flat list of notes whose name or folder matches.
@@ -90,24 +139,47 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
 
   // ---- Dragging, with pointer events instead of the browser's HTML5 drag and
   // drop, which behaves differently per browser and often never starts.
-  const press = useRef<{ path: string; name: string; x: number; y: number; active: boolean } | null>(null);
-  const target = useRef<string | null>(null); // mirrors dropTarget for the pointerup handler
+  // The row pressed, and once the drag starts, everything it carries (the selection, if it's part of it).
+  const press = useRef<{ path: string; name: string; x: number; y: number; active: boolean; paths: string[] } | null>(null);
+  const target = useRef<Drop | null>(null); // mirrors dropTarget for the pointerup handler
   const suppressClick = useRef(false); // the click that ends a drag shouldn't open the row
   const hoverOpen = useRef<{ folder: string; timer: ReturnType<typeof setTimeout> } | null>(null);
-  const latest = useRef({ onMove, setOpen });
-  latest.current = { onMove, setOpen };
+  const latest = useRef({ onPlace, setOpen, entries, expanded, selection, shown });
+  latest.current = { onPlace, setOpen, entries, expanded, selection, shown };
 
   useEffect(() => {
-    const setTarget = (t: string | null) => {
+    const setTarget = (t: Drop | null) => {
       target.current = t;
-      setDropTarget(t);
-      // Hovering a closed folder for a moment opens it, so you can drop deeper.
-      if (hoverOpen.current?.folder !== t) {
+      setDropTarget((old) => (JSON.stringify(old) === JSON.stringify(t) ? old : t));
+      // Hovering over a closed folder for a moment opens it, so you can drop deeper.
+      const folder = t?.kind === "into" ? t.folder : null;
+      if (hoverOpen.current?.folder !== folder) {
         if (hoverOpen.current) clearTimeout(hoverOpen.current.timer);
-        hoverOpen.current = t ? { folder: t, timer: setTimeout(() => latest.current.setOpen(t, true), 600) } : null;
+        hoverOpen.current = folder ? { folder, timer: setTimeout(() => latest.current.setOpen(folder, true), 600) } : null;
       }
     };
+    // Holding near the top or bottom of the list while dragging scrolls it, so you can reach spots out of view.
+    let scrollTimer: ReturnType<typeof setInterval> | null = null;
+    let lastPointer = { x: 0, y: 0 };
+    const autoScroll = (y: number) => {
+      const list = document.querySelector<HTMLElement>("[data-file-tree]");
+      const box = list?.getBoundingClientRect();
+      const EDGE = 36;
+      const speed = !box ? 0 : y < box.top + EDGE ? -(box.top + EDGE - y) / 3 : y > box.bottom - EDGE ? (y - (box.bottom - EDGE)) / 3 : 0;
+      if (!speed || !list) {
+        if (scrollTimer) clearInterval(scrollTimer);
+        scrollTimer = null;
+        return;
+      }
+      if (scrollTimer) clearInterval(scrollTimer);
+      scrollTimer = setInterval(() => {
+        list.scrollTop += Math.max(-14, Math.min(14, speed));
+        aim(lastPointer.x, lastPointer.y); // what's under the pointer changed
+      }, 16);
+    };
     const end = () => {
+      if (scrollTimer) clearInterval(scrollTimer);
+      scrollTimer = null;
       press.current = null;
       setGhost(null);
       setTarget(null);
@@ -121,12 +193,36 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
         p.active = true;
         document.body.style.cursor = "grabbing";
         window.getSelection()?.removeAllRanges();
+        // Dragging a selected row carries the whole selection; any other row, just itself.
+        const { selection: sel, shown: rows } = latest.current;
+        p.paths = sel.size > 1 && sel.has(p.path) ? topLevel(sel, rows) : [p.path];
       }
-      setGhost({ name: p.name, x: ev.clientX, y: ev.clientY });
-      const el = document.elementFromPoint(ev.clientX, ev.clientY);
-      const folder = el?.closest<HTMLElement>("[data-folder-path]")?.dataset.folderPath;
-      let t = folder ?? (el?.closest("[data-file-tree]") ? "" : null);
-      if (t !== null && (t === p.path || t.startsWith(p.path + "/"))) t = null; // not into itself
+      setGhost({ name: p.paths.length > 1 ? items(p.paths.length) : p.name, x: ev.clientX, y: ev.clientY });
+      lastPointer = { x: ev.clientX, y: ev.clientY };
+      aim(ev.clientX, ev.clientY);
+      autoScroll(ev.clientY);
+    };
+    /** The drop spot under the pointer: above/below a row, into a folder, or the end of the top level. */
+    const aim = (x: number, y: number) => {
+      const p = press.current;
+      if (!p?.active) return;
+      const el = document.elementFromPoint(x, y);
+      const rowEl = el?.closest<HTMLElement>("[data-entry-path]");
+      let t: Drop | null = null;
+      if (rowEl) {
+        // Where on the row: top or bottom edge = above or below it; a folder's middle = into it.
+        const path = rowEl.dataset.entryPath!;
+        const isFolder = rowEl.dataset.entryType === "folder";
+        const r = rowEl.getBoundingClientRect();
+        const f = (y - r.top) / r.height;
+        t = isFolder && f > 0.25 && f < 0.75 ? { kind: "into", folder: path } : { kind: "line", path, edge: f < 0.5 ? "top" : "bottom" };
+      } else if (el?.closest("[data-file-tree]")) {
+        t = { kind: "into", folder: "" }; // the empty area: the end of the top level
+      }
+      // Not into anything being dragged, or a folder inside it.
+      const dest = t && placement(t, latest.current.entries, latest.current.expanded).folder;
+      if (dest !== null && dest !== undefined && p.paths.some((m) => dest === m || dest.startsWith(m + "/"))) t = null;
+      if (t?.kind === "line" && p.paths.includes(t.path)) t = null; // next to itself: nowhere to go
       setTarget(t);
     };
     const onUp = () => {
@@ -135,16 +231,31 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
       if (p?.active) {
         suppressClick.current = true;
         setTimeout(() => (suppressClick.current = false), 0);
-        if (t !== null && parentOf(p.path) !== t) {
-          void latest.current.onMove(p.path, t).then(() => t && latest.current.setOpen(t, true));
+        if (t) {
+          const placed = placement(t, latest.current.entries, latest.current.expanded);
+          const { folder } = placed;
+          let { before } = placed;
+          const siblings = childrenOf(latest.current.entries, folder).map((e) => e.name);
+          // "Before" one of the dragged items: before the first item after it that stays put.
+          const moving = new Set(p.paths.filter((m) => parentOf(m) === folder).map((m) => m.split("/").pop()!));
+          if (before !== null && moving.has(before)) before = siblings.slice(siblings.indexOf(before)).find((n) => !moving.has(n)) ?? null;
+          const name = p.path.split("/").pop()!;
+          const here = p.paths.length === 1 && parentOf(p.path) === folder && (before === name || siblings[siblings.indexOf(name) + 1] === (before ?? undefined));
+          if (!here) {
+            if (p.paths.length > 1) setSelection(new Set()); // their paths change as they move
+            void latest.current.onPlace(p.paths, folder, before).then(() => folder && latest.current.setOpen(folder, true));
+          }
         }
       }
       end();
     };
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape" && press.current?.active) {
+      if (ev.key !== "Escape") return;
+      if (press.current?.active) {
         ev.stopPropagation();
         end();
+      } else if (latest.current.selection.size > 1 && !(ev.target as Element)?.closest?.("input, textarea, [contenteditable]")) {
+        setSelection(new Set()); // Esc clears a multi-selection
       }
     };
     window.addEventListener("pointermove", onMovePointer);
@@ -164,12 +275,15 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
       <div key={e.path}>
         <div
           data-folder-path={isFolder ? e.path : undefined}
+          data-entry-path={e.path}
+          data-entry-type={e.type}
           onPointerDown={(ev) => {
             if (ev.button !== 0 || renaming === e.path || (ev.target as Element).closest("button, input")) return;
-            press.current = { path: e.path, name: label(e), x: ev.clientX, y: ev.clientY, active: false };
+            press.current = { path: e.path, name: label(e), x: ev.clientX, y: ev.clientY, active: false, paths: [e.path] };
           }}
-          onClick={() => {
+          onClick={(ev) => {
             if (suppressClick.current) return;
+            if (select(e.path, ev) !== "one") return; // shift/⌘-click only changes the selection
             if (isFolder) {
               setOpen(e.path, !open);
               setSelectedFolder(e.path);
@@ -181,17 +295,29 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
           onContextMenu={(ev) => {
             ev.preventDefault();
             ev.stopPropagation();
+            // On a row outside the selection, the menu is for just that row.
+            if (!selection.has(e.path)) {
+              setSelection(new Set([e.path]));
+              anchor.current = e.path;
+            }
             setMenu({ entry: e, x: ev.clientX, y: ev.clientY });
           }}
           style={{ paddingLeft: 10 + depth * 14 }}
-          className={`group flex cursor-pointer items-center gap-1.5 rounded-md py-1.5 pr-1.5 text-[13px] leading-5 ${
-            dropTarget === e.path
+          className={`group relative flex cursor-pointer items-center gap-1.5 rounded-md py-1.5 pr-1.5 text-[13px] leading-5 ${
+            dropTarget?.kind === "into" && dropTarget.folder === e.path
               ? "bg-hover text-fg ring-1 ring-line-strong"
-              : e.path === activePath || (isFolder && e.path === selectedFolder)
+              : (multi && selection.has(e.path)) || e.path === activePath || (isFolder && e.path === selectedFolder)
                 ? "bg-hover text-fg"
                 : "text-muted hover:bg-hover hover:text-fg"
           }`}
         >
+          {dropTarget?.kind === "line" && dropTarget.path === e.path && (
+            // Where the dragged item will go: a line above or below this row, at its indent.
+            <span
+              className={`pointer-events-none absolute right-1 h-0.5 rounded-full bg-line-strong ${dropTarget.edge === "top" ? "-top-px" : "-bottom-px"}`}
+              style={{ left: 10 + depth * 14 }}
+            />
+          )}
           <span className="flex w-4 shrink-0 justify-center text-muted">
             {isFolder && <Chevron open={open} />}
           </span>
@@ -204,10 +330,7 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
               }}
             />
           ) : (
-            <>
-              <span className="min-w-0 flex-1 truncate">{label(e)}</span>
-              {badge(e) && <span className="shrink-0 text-[10px] font-medium tracking-wide text-muted">{badge(e)}</span>}
-            </>
+            <span className="min-w-0 flex-1 truncate">{label(e)}</span>
           )}
           {renaming !== e.path && isFolder && (
             <span className="hidden shrink-0 group-hover:flex">
@@ -244,9 +367,11 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
           clicking it makes the top level the place new items go. */}
       <div
         data-file-tree
-        className={`min-h-0 flex-1 overflow-y-auto px-2 pb-3 select-none ${dropTarget === "" ? "bg-hover/50" : ""}`}
+        className={`min-h-0 flex-1 overflow-y-auto px-2 pb-3 select-none ${dropTarget?.kind === "into" && dropTarget.folder === "" ? "bg-hover/50" : ""}`}
         onClick={(ev) => {
-          if (ev.target === ev.currentTarget) setSelectedFolder("");
+          if (ev.target !== ev.currentTarget) return;
+          setSelectedFolder("");
+          setSelection(new Set());
         }}
         onContextMenu={(ev) => {
           ev.preventDefault();
@@ -280,7 +405,10 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
           x={menu.x}
           y={menu.y}
           onClose={() => setMenu(null)}
-          items={[
+          items={
+            menu.entry && multi && selection.has(menu.entry.path)
+              ? [{ label: `Delete ${items(topLevel(selection, shown).length)}`, run: removeSelected, danger: true }]
+              : [
             ...(menu.entry === null || menu.entry.type === "folder"
               ? [
                   { label: "New note", run: () => void create("file", menu.entry?.path ?? "") },
@@ -293,7 +421,8 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
                   { label: "Delete", run: () => remove(menu.entry!), danger: true },
                 ]
               : []),
-          ]}
+                ]
+          }
         />
       )}
     </div>
@@ -302,8 +431,8 @@ export default function FileTree({ entries, activePath, filter, onOpen, onCreate
 
 /**
  * The folder arrow. Its style goes with the theme, picked in CSS (globals.css,
- * .chevron-*), so switching themes needs no re-render: sharp corners in Light
- * and Dark, soft rounded ones in Paper, pixels in Neon.
+ * .chevron-*), so switching themes needs no re-render: sharp corners by default,
+ * soft rounded ones in Mocha and Rosé, pixels in Neon.
  */
 function Chevron({ open }: { open: boolean }) {
   return (
@@ -335,6 +464,62 @@ function PixelChevron({ open }: { open: boolean }) {
       ))}
     </svg>
   );
+}
+
+/** The tree without images (or any other non-note files). */
+function notesOnly(entries: VaultEntry[]): VaultEntry[] {
+  return entries.flatMap<VaultEntry>((e) => (e.type === "folder" ? [{ ...e, children: notesOnly(e.children) }] : /\.md$/i.test(e.name) ? [e] : []));
+}
+
+const items = (n: number) => `${n} item${n === 1 ? "" : "s"}`;
+
+/** Every row's path as shown, top to bottom: folders, then (if open) their contents. */
+function visibleRows(entries: VaultEntry[], expanded: Set<string>): string[] {
+  return entries.flatMap((e) => [e.path, ...(e.type === "folder" && expanded.has(e.path) ? visibleRows(e.children, expanded) : [])]);
+}
+
+/** Selected paths without any that sit inside another selected folder (they go with it), in shown order. */
+function topLevel(selection: Set<string>, shown: string[]): string[] {
+  const all = [...selection];
+  const outer = all.filter((p) => !all.some((q) => q !== p && p.startsWith(q + "/")));
+  return outer.sort((a, b) => shown.indexOf(a) - shown.indexOf(b));
+}
+
+/** The entry at a path, or undefined. */
+function entryAt(entries: VaultEntry[], path: string): VaultEntry | undefined {
+  for (const e of entries) {
+    if (e.path === path) return e;
+    if (e.type === "folder" && path.startsWith(e.path + "/")) return entryAt(e.children, path);
+  }
+  return undefined;
+}
+
+/** A drop spot while dragging: a line above/below a row, or into a folder ("" = the top level). */
+type Drop = { kind: "line"; path: string; edge: "top" | "bottom" } | { kind: "into"; folder: string };
+
+/** A folder's entries, in tree order ("" = the top level). */
+function childrenOf(entries: VaultEntry[], folder: string): VaultEntry[] {
+  let list = entries;
+  for (const part of folder ? folder.split("/") : []) {
+    const next = list.find((e) => e.type === "folder" && e.name === part);
+    list = next?.type === "folder" ? next.children : [];
+  }
+  return list;
+}
+
+/**
+ * Where a drop spot puts the item: which folder, and before which item (null = at the end).
+ * Below an open folder is its first item, since that's what sits right under it.
+ */
+function placement(t: Drop, entries: VaultEntry[], expanded: Set<string>): { folder: string; before: string | null } {
+  if (t.kind === "into") return { folder: t.folder, before: null };
+  const folder = parentOf(t.path);
+  const siblings = childrenOf(entries, folder);
+  const i = siblings.findIndex((e) => e.path === t.path);
+  if (t.edge === "top") return { folder, before: siblings[i]?.name ?? null };
+  const row = siblings[i];
+  if (row?.type === "folder" && expanded.has(row.path)) return { folder: row.path, before: row.children[0]?.name ?? null };
+  return { folder, before: siblings[i + 1]?.name ?? null };
 }
 
 function DragGhost({ name, x, y }: { name: string; x: number; y: number }) {

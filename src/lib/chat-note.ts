@@ -68,6 +68,7 @@ Write the notes themselves: no preamble ("Here is a summary"), no sign-off.
 Write the knowledge directly, not a play-by-play ("the user asked..., the assistant said..."); when it helps, a question can be a bold label with its answer under it.
 Keep what's worth coming back to: answers, conclusions, decisions, definitions, steps, and short code or commands.
 Be concise. Use bullet points, **bold** for key terms, tables only when comparing several things, and fenced code blocks for code. Don't use HTML.
+Write math in LaTeX ($\\hat{\\theta}_n$ inline, $$…$$ on their own lines for display), not Unicode accents or subscripts.
 Don't start with a title or heading that restates the chat's topic: the note already has a title.`;
 
 const INSTRUCTIONS: Record<NoteKind, string> = {

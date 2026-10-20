@@ -5,6 +5,7 @@ import { EditorState, type Extension, type Range, StateField } from "@codemirror
 import { Decoration, type DecorationSet, EditorView, keymap, placeholder, WidgetType } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import katex from "katex";
+import { ACCENTED } from "./accents";
 import { DISPLAY_LINE, DISPLAY_OPEN, displayClose, findInlineMath } from "./math";
 import { indent, parseToggles, toggles } from "./toggles";
 import { annotations } from "./annotations";
@@ -113,6 +114,11 @@ export function build(state: EditorState): DecorationSet {
 
   inline(state, active, decos);
   inlineMath(state, active, decos);
+  // θ̂ typed as text: a font that puts the hat over the letter (see accents.ts).
+  const text = doc.toString();
+  if (/[\u0300-\u036F\u20D0-\u20FF]/.test(text)) {
+    for (const m of text.matchAll(ACCENTED)) decos.push(Decoration.mark({ class: "cm-accent" }).range(m.index!, m.index! + m[0].length));
+  }
   return Decoration.set(decos, true);
 }
 
@@ -461,6 +467,7 @@ const theme = EditorView.theme({
   ".cm-md-fence-open": { borderTopLeftRadius: "8px", borderTopRightRadius: "8px" },
   ".cm-md-fence-close": { borderBottomLeftRadius: "8px", borderBottomRightRadius: "8px" },
   ".cm-md-fence-edge": { lineHeight: "0.9em" }, // the hidden ``` lines become the box's padding
+  ".cm-accent": { fontFamily: '"STIX Two Text", "Cambria Math", KaTeX_Main, serif' },
   ".cm-md-math": { cursor: "text" },
   ".cm-md-math-display": { padding: "0.25em 0", overflowX: "auto", overflowY: "hidden" },
   ".cm-md-math-src": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: "0.875em" },

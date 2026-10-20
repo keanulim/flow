@@ -8,6 +8,7 @@ import rehypeKatex from "rehype-katex";
 import type { Message, Thread } from "@/lib/db";
 import { rehypeAnchors, type Anchor } from "@/lib/rehype-anchors";
 import { rehypeFade } from "@/lib/rehype-fade";
+import { rehypeAccents } from "@/lib/accents";
 import { normalizeMath } from "@/lib/math";
 import { type Attachment, replyWentWrong } from "@/lib/shared";
 import { formatBytes, uploadAttachment } from "@/lib/upload";
@@ -253,6 +254,7 @@ function BubbleView({ message, threadId, forkable, compact, anchors, fade }: Bub
         rehypePlugins={[
           [rehypeKatex, { throwOnError: false }] satisfies Pluggable,
           rehypeHighlight satisfies Pluggable,
+          rehypeAccents satisfies Pluggable,
           ...(anchors?.length ? [[rehypeAnchors, { anchors }] satisfies Pluggable] : []),
           ...(fade ? [[rehypeFade, { ...fade, source: normalizeMath(fade.source) }] satisfies Pluggable] : []),
         ]}

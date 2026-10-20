@@ -20,7 +20,6 @@ import ContextMenu from "./ContextMenu";
 import Settings from "./Settings";
 import AssistantPanel from "./AssistantPanel";
 import LambdaMark from "./LambdaMark";
-import ImageView from "./ImageView";
 
 // The notes editor (CodeMirror) is only downloaded once a note is opened, so
 // the chat view doesn't load it.
@@ -490,8 +489,8 @@ export default function Flow() {
   const onMapExit = useCallback(() => mainInput.current?.focus(), []);
 
   const fileActions = useMemo(
-    () => ({ onOpen: openFresh, onCreate: vault.createEntry, onRename: vault.renameEntry, onMove: vault.moveEntry, onDelete: vault.deleteEntry }),
-    [openFresh, vault.createEntry, vault.renameEntry, vault.moveEntry, vault.deleteEntry],
+    () => ({ onOpen: openFresh, onCreate: vault.createEntry, onRename: vault.renameEntry, onPlace: vault.placeEntries, onDelete: vault.deleteEntries }),
+    [openFresh, vault.createEntry, vault.renameEntry, vault.placeEntries, vault.deleteEntries],
   );
 
   // ---------- render ----------
@@ -539,9 +538,7 @@ export default function Flow() {
       {home ? (
         <>
         <main className="min-w-0 flex-1">
-          {openNote && !isNotePath(openNote) ? (
-            <ImageView path={openNote} />
-          ) : openNote ? (
+          {openNote && isNotePath(openNote) ? (
             <NoteEditor
               // Remounts when a note finishes writing, so it loads the saved file.
               // Remounts after an undo too (noteVersion), to load the file again.
@@ -551,6 +548,7 @@ export default function Flow() {
               ref={editor}
               path={openNote}
               onError={report}
+              onFilesChanged={() => void loadFiles()}
               links={linkHost}
               linksVersion={linksVersion}
               back={noteHistory.length ? { label: noteHistory.at(-1)!.split("/").pop()!.replace(/\.md$/i, ""), go: () => void goBack() } : undefined}

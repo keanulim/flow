@@ -60,10 +60,30 @@ export function linkedPages(markdown: string): string[] {
   for (const line of markdown.split("\n")) {
     if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
     if (inFence) continue;
-    for (const m of line.matchAll(/(?<!!)\[\[([^[\]\n|]+)(?:\|[^[\]\n]+)?\]\]/g)) { // not ![[embeds]]
+    for (const m of maskInlineCode(line).matchAll(/(?<!!)\[\[([^[\]\n|]+)(?:\|[^[\]\n]+)?\]\]/g)) { // not ![[embeds]] or `code`
       const page = m[1].split("#")[0].trim();
       if (page && !out.includes(page)) out.push(page);
     }
   }
   return out;
+}
+
+/** The images a note embeds with ![[name]] / ![[name|width]], once each, in order (outside code blocks). */
+export function embeddedImages(markdown: string): string[] {
+  const out: string[] = [];
+  let inFence = false;
+  for (const line of markdown.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    if (inFence) continue;
+    for (const m of maskInlineCode(line).matchAll(/!\[\[([^[\]\n|]+)(?:\|[^[\]\n]*)?\]\]/g)) {
+      const target = m[1].trim();
+      if (target && !out.some((t) => t.toLowerCase() === target.toLowerCase())) out.push(target);
+    }
+  }
+  return out;
+}
+
+/** A line with its `inline code` blanked out (same length, so positions still line up): links and embeds in code are examples, not real. */
+export function maskInlineCode(line: string): string {
+  return line.replace(/(`+)[^`].*?\1/g, (code) => " ".repeat(code.length));
 }

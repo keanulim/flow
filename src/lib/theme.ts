@@ -1,9 +1,11 @@
 /** Color themes (Settings > Appearance). The colors themselves are in globals.css. */
 export const THEMES = [
   { id: "light", label: "Light", swatch: ["#ffffff", "#1c1917"] },
-  { id: "paper", label: "Paper", swatch: ["#ece4d4", "#2a241c"] },
   { id: "dark", label: "Dark", swatch: ["#1c1b1a", "#e7e5e4"] },
   { id: "neon", label: "Neon", swatch: ["#0a0a12", "#ff4fa3"] },
+  { id: "nord", label: "Nord", swatch: ["#2e3440", "#88c0d0"] },
+  { id: "mocha", label: "Mocha", swatch: ["#1e1e2e", "#cba6f7"] },
+  { id: "rose", label: "Rosé", swatch: ["#faf4ed", "#907aa9"] },
 ] as const;
 
 export type ThemeId = (typeof THEMES)[number]["id"];

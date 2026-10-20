@@ -4,7 +4,8 @@ import { addNoteChatMessage, clearNoteChat, getNoteChat } from "@/lib/db";
 import { streamNoteAssistant } from "@/lib/llm";
 import { linkedPages, listNotes, type NoteInfo, resolveNote } from "@/lib/notes";
 import { type ChatEvent, EMPTY_REPLY, errorNote, type Source, STOPPED_NOTE, withSources } from "@/lib/shared";
-import { createNoteWithContent, listVault, readNote, VaultError, writeNote } from "@/lib/vault";
+import { saveNote } from "@/lib/note-images";
+import { createNoteWithContent, listVault, readNote, VaultError } from "@/lib/vault";
 
 /**
  * The AI assistant beside a note. Each note has its own conversation (kept out
@@ -123,7 +124,8 @@ export async function POST(req: Request) {
       } finally {
         await gen.return({ note, changed }).catch(() => {});
         // Keep what was edited, even if the reply was stopped or failed partway.
-        if (changed) await writeNote(path, note).catch((e) => console.error("[note assistant] save failed", e));
+        // (Through saveNote, so images the edit removed are tidied up like a hand edit.)
+        if (changed) await saveNote(path, note).catch((e) => console.error("[note assistant] save failed", e));
         addNoteChatMessage(path, "assistant", withSources(reply, sources) + (stopped ? STOPPED_NOTE : "") || EMPTY_REPLY);
         try {
           controller.close();
