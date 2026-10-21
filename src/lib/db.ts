@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
-import { dbPath } from "./sandbox";
+import { DEMO, dbPath } from "./sandbox";
 import type { Attachment } from "./shared";
 
 export type Role = "user" | "assistant";
@@ -60,7 +60,9 @@ export function closeDb(file: string) {
 function open(file: string): Database.Database {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
-  db.pragma("journal_mode = WAL");
+  // WAL is faster, but keeps recent changes in a side file. A demo sandbox's database
+  // is copied to shared storage after changes (sandbox-route.ts), so there it's one plain file.
+  db.pragma(`journal_mode = ${DEMO ? "DELETE" : "WAL"}`);
   db.pragma("foreign_keys = ON");
   db.exec(`
     CREATE TABLE IF NOT EXISTS threads (

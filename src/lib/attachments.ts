@@ -2,7 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { BuiltContext } from "./context";
-import { dataDir } from "./sandbox";
+import { DEMO, dataDir } from "./sandbox";
 import { type Attachment, attachmentKind, MAX_ATTACHMENT_BYTES } from "./shared";
 
 /**
@@ -22,6 +22,8 @@ export class AttachmentError extends Error {}
 export async function saveAttachment(file: File): Promise<Attachment> {
   const kind = attachmentKind(file.type, file.name);
   if (!kind) throw new AttachmentError(`Can't attach ${file.name}: only images, PDFs and text files are supported`);
+  // The public demo keeps each visitor's sandbox small (it's copied to shared storage after changes).
+  if (DEMO && file.size > 1024 * 1024) throw new AttachmentError(`${file.name} is too big for the demo (files can be up to 1 MB here)`);
   if (file.size > MAX_ATTACHMENT_BYTES[kind]) throw new AttachmentError(`${file.name} is too big (limit ${MAX_ATTACHMENT_BYTES[kind] / 1024 / 1024} MB for this kind of file)`);
   const bytes = Buffer.from(await file.arrayBuffer());
   if (kind === "text" && bytes.includes(0)) throw new AttachmentError(`${file.name} doesn't look like a text file`);

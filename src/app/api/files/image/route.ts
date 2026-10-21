@@ -1,6 +1,7 @@
 import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
 import { IMAGE_FILE } from "@/lib/notes";
+import { DEMO } from "@/lib/sandbox";
 import { saveImage, VaultError } from "@/lib/vault";
 
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -12,7 +13,7 @@ async function handlePOST(req: Request) {
   const folder = form?.get("folder");
   if (!(file instanceof File) || typeof folder !== "string") return NextResponse.json({ error: "Expected a folder and a file" }, { status: 400 });
   if (!IMAGE_FILE.test(file.name) || !file.type.startsWith("image/")) return NextResponse.json({ error: "Only images can be added to notes" }, { status: 400 });
-  if (file.size > MAX_BYTES) return NextResponse.json({ error: "Images can be up to 25 MB" }, { status: 400 });
+  if (file.size > (DEMO ? 1024 * 1024 : MAX_BYTES)) return NextResponse.json({ error: DEMO ? "In the demo, images can be up to 1 MB" : "Images can be up to 25 MB" }, { status: 400 });
   try {
     return NextResponse.json({ path: await saveImage(folder, file.name, Buffer.from(await file.arrayBuffer())) });
   } catch (e) {

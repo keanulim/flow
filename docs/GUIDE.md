@@ -282,7 +282,14 @@ With `FLOW_DEMO=1` (for a deployment you can share), the app runs with simulated
 3. **AsyncLocalStorage** carries "this request's sandbox" through all of the request's async work, including streamed replies. `db.ts`, `vault.ts` and `attachments.ts` ask `dbPath()` / `vaultDir()` / `dataDir()` instead of using fixed paths, so none of them had to change how they work.
 4. `realModel()` in `llm.ts` refuses to call Claude in demo mode, even with a key set.
 
-Outside demo mode none of this applies: no sandbox, data in `data/` as always. Sandboxes unused for 6 hours are deleted. Serverless hosts like Vercel only allow writing to `/tmp`, which suits throwaway sandboxes.
+Outside demo mode none of this applies: no sandbox, data in `data/` as always. Sandboxes unused for 6 hours are deleted.
+
+**On Vercel, with Redis:** serverless hosts run several copies (instances) of the server, each with its own `/tmp`, and one visitor's requests land on any of them. The first deploy showed it: a "Chat notes" folder appeared and disappeared as requests alternated between two instances. So with Upstash Redis configured, the real copy of each sandbox lives in Redis and each `/tmp` is a cache:
+
+- Before a request: compare the sandbox's version in Redis with the local copy's; download if it's behind.
+- After a request that changes something (anything but GET), once the response has finished (streamed replies too): upload it as the next version (data first, then the version number).
+- A new visitor's first requests arrive in parallel, possibly on different instances: only the first to store its seeded copy wins (`SET … NX`), and the others download that one, so message ids agree everywhere.
+- Demo databases use SQLite's plain rollback journal instead of WAL, so the database is a single file that's safe to copy. Demo uploads are capped at 1 MB; a sandbox is about 70 KB.
 
 ---
 
@@ -470,6 +477,7 @@ Real bugs from building this, with what each one teaches.
 | Math in chats: fractions overlapped, subscripts full-size | Two KaTeX versions: chats rendered with 0.16 (inside rehype-katex), the page loaded 0.19's CSS, which renamed `.sizing` to `.katex-sizing` | **One version of a library everywhere** (`npm ls <pkg>` shows duplicates). |
 | Hats (θ̂) drawn beside Greek letters | Inter has no combining accents, so the hat came from a fallback font that can't place it on Greek | Measure which font draws a character (`unicodeRange`); draw just those characters in a font that can. |
 | Example `![[photo.png]]` in inline code counted as a real embed | Embeds were found everywhere except code *blocks* | Treat inline code like code blocks wherever syntax is detected. |
+| The demo's files appeared and disappeared on Vercel | Each serverless instance has its own `/tmp`, and requests alternate between instances | **Serverless means no shared disk.** Keep state somewhere every instance can reach (here Redis), and test with two local instances. |
 | A formatter rewrote a whole file | It used a different style than the project | Don't run tools the project doesn't use; keep diffs to what changed. |
 
 **General habits that paid off:**
@@ -505,7 +513,7 @@ Real bugs from building this, with what each one teaches.
 | Oct 15 | Notes workspace; chats to notes; live note writing; chat links; one rendered editor; themes; streaming fade-in; hooks and components split; AI titles; chat rename and delete. |
 | Oct 17 | Note assistant (edits, reads notes, web search, attachments); chat web search; uploads; math; images in notes; page creation; sidebar redesign; Neon theme; README rewrite. |
 | Oct 19 | Link selected words to pages, chats or web pages; chat fade. |
-| Oct 21 | Demo mode for a public deployment: simulated AI, a private seeded sandbox per visitor. |
+| Oct 21 | Demo mode for a public deployment: simulated AI, a private seeded sandbox per visitor, synced through Redis on Vercel. Next.js and React security patches. |
 | Oct 20 | Notes on text: highlight words, attach a note, click to see it. Everything switched to Haiku 5.5. Fixed math rendering in chats and accented letters (θ̂). Images removed from pages go to the trash. Drag to arrange files. |
 | | *Add new entries here.* |
 

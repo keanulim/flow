@@ -68,7 +68,13 @@ Flow has a demo mode for sharing it with people (say, on a resume) without your 
 
 Turn it on with the environment variable `FLOW_DEMO=1`.
 
-**Deploying to Vercel:** import the GitHub repo at [vercel.com/new](https://vercel.com/new), add the environment variable `FLOW_DEMO` = `1` (and *don't* add `ANTHROPIC_API_KEY`), then deploy. Every push to `main` redeploys.
+**Deploying to Vercel:**
+
+1. Import the GitHub repo at [vercel.com/new](https://vercel.com/new) and add the environment variable `FLOW_DEMO` = `1`. *Don't* add `ANTHROPIC_API_KEY`.
+2. Add a free **Upstash Redis** database from the project's **Storage** tab (Vercel Marketplace) and connect it to the project. It sets the `KV_REST_API_URL` / `KV_REST_API_TOKEN` variables Flow looks for.
+3. Redeploy. Every push to `main` redeploys after that.
+
+Why Redis: Vercel runs several copies of the server, each with its own temporary disk, and a visitor's requests can land on any of them. The real copy of each sandbox lives in Redis (about 70 KB each); each server's disk is just a cache of it. Without Redis, a visitor would see their changes come and go.
 
 To try demo mode locally without disturbing the dev server:
 
