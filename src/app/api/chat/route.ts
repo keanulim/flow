@@ -1,3 +1,4 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { attachFiles, resolveAttachments } from "@/lib/attachments";
 import { buildContext } from "@/lib/context";
 import { addMessage, deleteMessage, getMessages, getThread, renameThread } from "@/lib/db";
@@ -24,7 +25,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
  * copy without re-downloading the conversation, even if it stops the reply
  * before any text (or response headers) arrive.
  */
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const { threadId, content = "", attachments: attachmentIds, userMessageId, assistantMessageId, webSearch = true, retry = false } = (await req.json()) as {
     threadId: string;
     content?: string;
@@ -125,3 +126,6 @@ export async function POST(req: Request) {
 
   return new Response(body, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8" } });
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const POST = sandboxed(handlePOST);

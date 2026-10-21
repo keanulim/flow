@@ -1,3 +1,4 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { readImage, VaultError } from "@/lib/vault";
 
 const TYPES: Record<string, string> = {
@@ -16,7 +17,7 @@ const TYPES: Record<string, string> = {
  * so everything is served with a sandbox policy (no scripts, even if the image
  * is opened directly) and nosniff (the browser won't guess another type).
  */
-export async function GET(req: Request) {
+async function handleGET(req: Request) {
   const path = new URL(req.url).searchParams.get("path") ?? "";
   try {
     const bytes = await readImage(path);
@@ -32,3 +33,6 @@ export async function GET(req: Request) {
     return new Response(e instanceof VaultError ? e.message : "not found", { status: e instanceof VaultError ? e.status : 404 });
   }
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const GET = sandboxed(handleGET);

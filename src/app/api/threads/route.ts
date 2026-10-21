@@ -1,14 +1,15 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
 import { createThread, getMessages, getThread, listAllThreads, listConversations } from "@/lib/db";
 
 /** List conversations (main threads only), or with ?all=1 every thread's id, parent, title and kind. */
-export async function GET(req: Request) {
+async function handleGET(req: Request) {
   if (new URL(req.url).searchParams.get("all")) return NextResponse.json(listAllThreads());
   return NextResponse.json(listConversations());
 }
 
 /** Create a conversation, or fork a side thread when parentThreadId is given. */
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = (await req.json()) as {
     parentThreadId?: string;
     forkMessageId?: string;
@@ -37,3 +38,7 @@ export async function POST(req: Request) {
     }),
   );
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const GET = sandboxed(handleGET);
+export const POST = sandboxed(handlePOST);

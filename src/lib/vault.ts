@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { IMAGE_FILE } from "./notes";
+import { vaultDir } from "./sandbox";
 
 /**
  * The vault: a plain folder of Markdown files, like an Obsidian vault. Notes
  * stay ordinary files, so any editor (Obsidian included) can open them too.
  * Set FLOW_VAULT_PATH to point Flow at an existing vault.
  */
-export const VAULT_ROOT = path.resolve(process.env.FLOW_VAULT_PATH ?? path.join(process.cwd(), "data", "vault"));
+// The notes folder: data/vault, FLOW_VAULT_PATH, or (demo mode) the visitor's sandbox. A function, not a constant, for that.
+const vaultRoot = () => vaultDir();
 const TRASH = ".trash"; // deleted items are moved here, not erased (Obsidian does the same)
 
 export type VaultEntry =
@@ -33,14 +35,14 @@ export async function resolveInVault(rel: string, { mustExist = false } = {}): P
   if (typeof rel !== "string" || rel.includes("\0")) throw new VaultError("Invalid path");
   const cleaned = rel.replace(/\\/g, "/").replace(/^\/+/, "");
   if (cleaned.split("/").some((part) => part === "..")) throw new VaultError("Invalid path");
-  const abs = path.resolve(VAULT_ROOT, cleaned);
-  if (abs !== VAULT_ROOT && !abs.startsWith(VAULT_ROOT + path.sep)) throw new VaultError("Path is outside the vault");
+  const abs = path.resolve(vaultRoot(), cleaned);
+  if (abs !== vaultRoot() && !abs.startsWith(vaultRoot() + path.sep)) throw new VaultError("Path is outside the vault");
   if (cleaned.split("/")[0] === TRASH) throw new VaultError("Path is in the trash");
 
   // A symlink inside the vault could still point elsewhere: check where it really lands.
   const real = await fs.realpath(abs).catch(() => null);
   if (real) {
-    const root = await fs.realpath(VAULT_ROOT);
+    const root = await fs.realpath(vaultRoot());
     if (real !== root && !real.startsWith(root + path.sep)) throw new VaultError("Path is outside the vault");
   } else if (mustExist) {
     throw new VaultError("Not found", 404);
@@ -48,7 +50,7 @@ export async function resolveInVault(rel: string, { mustExist = false } = {}): P
   return abs;
 }
 
-const toRel = (abs: string) => path.relative(VAULT_ROOT, abs).split(path.sep).join("/");
+const toRel = (abs: string) => path.relative(vaultRoot(), abs).split(path.sep).join("/");
 
 // ---------- custom order (drag to arrange) ----------
 
@@ -59,7 +61,7 @@ const toRel = (abs: string) => path.relative(VAULT_ROOT, abs).split(path.sep).jo
  * anything not in a folder's list (new items) goes after the listed ones.
  */
 type Order = Record<string, string[]>;
-const ORDER_FILE = () => path.join(VAULT_ROOT, ".flow", "order.json");
+const ORDER_FILE = () => path.join(vaultRoot(), ".flow", "order.json");
 
 async function readOrder(): Promise<Order> {
   try {
@@ -110,7 +112,7 @@ function checkName(name: string) {
 }
 
 export async function ensureVault() {
-  await fs.mkdir(VAULT_ROOT, { recursive: true });
+  await fs.mkdir(vaultRoot(), { recursive: true });
 }
 
 /** Folders, .md notes and images, folders first, alphabetical. Hidden entries (.trash, .obsidian) are skipped. */
@@ -136,7 +138,7 @@ export async function listVault(): Promise<VaultEntry[]> {
     };
     return out.map((e, i) => ({ e, i })).sort((a, b) => rank(a.e) - rank(b.e) || a.i - b.i).map(({ e }) => e);
   };
-  return walk(VAULT_ROOT);
+  return walk(vaultRoot());
 }
 
 export async function readNote(rel: string): Promise<string> {
@@ -155,7 +157,7 @@ export async function createEntry(parent: string, name: string, type: "file" | "
   await ensureVault();
   const finalName = type === "file" && !name.toLowerCase().endsWith(".md") ? `${name}.md` : name;
   checkName(finalName);
-  const parentAbs = parent ? await resolveInVault(parent, { mustExist: true }) : VAULT_ROOT;
+  const parentAbs = parent ? await resolveInVault(parent, { mustExist: true }) : vaultRoot();
   const abs = await resolveInVault(toRel(path.join(parentAbs, finalName)));
   if (await exists(abs)) throw new VaultError("Already exists", 409);
   if (type === "folder") await fs.mkdir(abs);
@@ -230,7 +232,7 @@ export function cleanNoteName(text: string): string {
 export async function createNoteWithContent(folder: string, name: string, content: string): Promise<string> {
   const base = cleanNoteName(name);
   if (!base) throw new VaultError("The page needs a name");
-  const dir = folder ? await resolveInVault(folder, { mustExist: true }) : (await ensureVault(), VAULT_ROOT);
+  const dir = folder ? await resolveInVault(folder, { mustExist: true }) : (await ensureVault(), vaultRoot());
   if (!(await fs.stat(dir)).isDirectory()) throw new VaultError("Not a folder");
   for (let n = 0; n < 100; n++) {
     const abs = await resolveInVault(toRel(path.join(dir, `${n ? `${base} ${n}` : base}.md`)));
@@ -257,7 +259,7 @@ export async function readImage(rel: string): Promise<Buffer> {
 export async function saveImage(folder: string, name: string, bytes: Buffer): Promise<string> {
   checkName(name);
   if (!IMAGE_FILE.test(name)) throw new VaultError("Only images can be added");
-  const dir = folder ? await resolveInVault(folder, { mustExist: true }) : (await ensureVault(), VAULT_ROOT);
+  const dir = folder ? await resolveInVault(folder, { mustExist: true }) : (await ensureVault(), vaultRoot());
   const ext = path.extname(name);
   const base = name.slice(0, -ext.length);
   for (let n = 0; n < 1000; n++) {
@@ -275,8 +277,8 @@ export async function saveImage(folder: string, name: string, bytes: Buffer): Pr
 /** "Delete" = move into .trash with a timestamp, so nothing is lost by accident. Returns its name in the trash. */
 export async function trashEntry(rel: string): Promise<string> {
   const src = await resolveInVault(rel, { mustExist: true });
-  if (src === VAULT_ROOT) throw new VaultError("Can't delete the vault");
-  const trash = path.join(VAULT_ROOT, TRASH);
+  if (src === vaultRoot()) throw new VaultError("Can't delete the vault");
+  const trash = path.join(vaultRoot(), TRASH);
   await fs.mkdir(trash, { recursive: true });
   const ext = path.extname(src);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -289,7 +291,7 @@ export async function trashEntry(rel: string): Promise<string> {
 /** Move something back out of .trash to `rel` (which must be free, in an existing folder). False if it can't be. */
 export async function restoreFromTrash(trashedName: string, rel: string): Promise<boolean> {
   if (!trashedName || /[\/\\\0]/.test(trashedName) || trashedName.startsWith(".")) return false;
-  const src = path.join(VAULT_ROOT, TRASH, trashedName);
+  const src = path.join(vaultRoot(), TRASH, trashedName);
   const dest = await resolveInVault(rel).catch(() => null);
   if (!dest || (await exists(dest)) || !(await exists(src))) return false;
   if (!(await exists(path.dirname(dest)))) return false;

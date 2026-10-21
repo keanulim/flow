@@ -1,3 +1,4 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { getAttachment, readAttachment } from "@/lib/attachments";
 
 /**
@@ -5,7 +6,7 @@ import { getAttachment, readAttachment } from "@/lib/attachments";
  * served as plain text (never as HTML), and nosniff stops the browser from
  * guessing otherwise, so an uploaded .html can't run as a page here.
  */
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+async function handleGET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const meta = await getAttachment(id);
   if (!meta) return new Response("not found", { status: 404 });
@@ -20,3 +21,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     },
   });
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const GET = sandboxed(handleGET);

@@ -271,6 +271,19 @@ Every color is a **CSS variable** (`--bg`, `--fg`, `--muted`, `--line`, `--accen
 
 **No flash on reload:** a tiny inline script in `<head>` reads the saved theme from `localStorage` and sets `data-theme` **before the page paints**. Without it, a dark-theme user would see a white flash on every load. Even the file tree's folder arrow changes per theme in CSS alone: soft in Mocha and Rosé, pixelated in Neon, sharp in the rest.
 
+### 4.13 Demo mode (a public demo)
+
+**Files:** `sandbox.ts`, `sandbox-route.ts`, `middleware.ts`, `demo/`
+
+With `FLOW_DEMO=1` (for a deployment you can share), the app runs with simulated AI and a **private sandbox per visitor**:
+
+1. The middleware gives each new visitor a random id in a cookie.
+2. Every API route is wrapped in `sandboxed()`, which finds that visitor's folder (`/tmp/flow-demo/<id>`), creating it from `demo/` (sample notes and chats) the first time.
+3. **AsyncLocalStorage** carries "this request's sandbox" through all of the request's async work, including streamed replies. `db.ts`, `vault.ts` and `attachments.ts` ask `dbPath()` / `vaultDir()` / `dataDir()` instead of using fixed paths, so none of them had to change how they work.
+4. `realModel()` in `llm.ts` refuses to call Claude in demo mode, even with a key set.
+
+Outside demo mode none of this applies: no sandbox, data in `data/` as always. Sandboxes unused for 6 hours are deleted. Serverless hosts like Vercel only allow writing to `/tmp`, which suits throwaway sandboxes.
+
 ---
 
 ## 5. Features, by area
@@ -362,6 +375,8 @@ All of this is git-ignored, so your data never ends up on GitHub.
 | `rehype-fade.ts` | Fade-in for streaming text. |
 | `theme.ts` | The theme list and the no-flash boot script. |
 | `home-note.ts` | The Home note's welcome guide. |
+| `sandbox.ts` | Demo mode: which sandbox a request is in, and the data paths that follow it. |
+| `sandbox-route.ts` | Demo mode: the route wrapper, creating and seeding sandboxes, cleaning up old ones. |
 
 ### `src/hooks/`: state for the app shell
 
@@ -490,6 +505,7 @@ Real bugs from building this, with what each one teaches.
 | Oct 15 | Notes workspace; chats to notes; live note writing; chat links; one rendered editor; themes; streaming fade-in; hooks and components split; AI titles; chat rename and delete. |
 | Oct 17 | Note assistant (edits, reads notes, web search, attachments); chat web search; uploads; math; images in notes; page creation; sidebar redesign; Neon theme; README rewrite. |
 | Oct 19 | Link selected words to pages, chats or web pages; chat fade. |
+| Oct 21 | Demo mode for a public deployment: simulated AI, a private seeded sandbox per visitor. |
 | Oct 20 | Notes on text: highlight words, attach a note, click to see it. Everything switched to Haiku 5.5. Fixed math rendering in chats and accented letters (θ̂). Images removed from pages go to the trash. Drag to arrange files. |
 | | *Add new entries here.* |
 
@@ -507,7 +523,6 @@ Offered or discussed, not built yet. Roughly by value.
 - **Edit a sent message** and re-run from there.
 - **Model picker** (Opus for hard questions, Haiku for quick ones).
 - **Import chats** from ChatGPT or Claude exports.
-- **Demo mode** for sharing the project without your API key.
 - **Desktop app** with Tauri (the long-term plan).
 
 ---

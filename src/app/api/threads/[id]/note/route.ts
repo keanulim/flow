@@ -1,3 +1,4 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
 import { buildTree, MAX_TOKENS, type NoteEvent, noteFileName, promptFor, renderNote, SYSTEM, summarizeTree } from "@/lib/chat-note";
 import { getConversation, getThread } from "@/lib/db";
@@ -20,7 +21,7 @@ const SAVE_EVERY = 1500; // ms between saves of the half-written note
  * Always creates a new file ("Title", "Title 2", ...), so it never overwrites
  * edits made to an earlier note of the same chat.
  */
-export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const thread = getThread(id);
   if (!thread) return NextResponse.json({ error: "Chat not found" }, { status: 404 });
@@ -120,3 +121,6 @@ async function createNoteFile(title: string): Promise<string> {
     }
   }
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const POST = sandboxed(handlePOST);

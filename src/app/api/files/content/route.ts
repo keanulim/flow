@@ -1,3 +1,4 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
 import { saveNote } from "@/lib/note-images";
 import { readNote, VaultError } from "@/lib/vault";
@@ -9,7 +10,7 @@ function fail(e: unknown) {
 }
 
 /** Read a note: ?path=Folder/Note.md */
-export async function GET(req: Request) {
+async function handleGET(req: Request) {
   try {
     return NextResponse.json({ content: await readNote(new URL(req.url).searchParams.get("path") ?? "") });
   } catch (e) {
@@ -22,7 +23,7 @@ export async function GET(req: Request) {
  * does) go to the trash; returns { removed, restored } image paths, so the
  * file tree can refresh.
  */
-export async function PUT(req: Request) {
+async function handlePUT(req: Request) {
   try {
     const { path, content } = (await req.json()) as { path: string; content: string };
     if (typeof content !== "string") throw new VaultError("Missing content");
@@ -31,3 +32,7 @@ export async function PUT(req: Request) {
     return fail(e);
   }
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const GET = sandboxed(handleGET);
+export const PUT = sandboxed(handlePUT);

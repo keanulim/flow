@@ -1,3 +1,4 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
 import { untitledThreads } from "@/lib/db";
 import { autoTitle } from "@/lib/titles";
@@ -6,7 +7,7 @@ import { autoTitle } from "@/lib/titles";
  * Write titles for every chat and branch that still has its placeholder
  * (threads from before titles were automatic). A few at a time; returns what each became.
  */
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const mock = process.env.NODE_ENV !== "production" && !!req.headers.get("x-flow-mock");
   const ids = untitledThreads();
   const results: { id: string; title: string | null; error?: string }[] = [];
@@ -24,3 +25,6 @@ export async function POST(req: Request) {
   await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
   return NextResponse.json({ titled: results });
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const POST = sandboxed(handlePOST);

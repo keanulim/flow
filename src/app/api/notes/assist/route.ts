@@ -1,3 +1,4 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
 import { attachmentBlocks, resolveAttachments } from "@/lib/attachments";
 import { addNoteChatMessage, clearNoteChat, getNoteChat } from "@/lib/db";
@@ -17,20 +18,20 @@ import { createNoteWithContent, listVault, readNote, VaultError } from "@/lib/va
  *   events (text, status, the note's new text after each edit, pages it created). `content`
  *   is the note as the editor has it; the edited note is saved when done.
  */
-export async function GET(req: Request) {
+async function handleGET(req: Request) {
   const path = new URL(req.url).searchParams.get("path");
   if (!path) return NextResponse.json({ error: "path is required" }, { status: 400 });
   return NextResponse.json(getNoteChat(path));
 }
 
-export async function DELETE(req: Request) {
+async function handleDELETE(req: Request) {
   const path = new URL(req.url).searchParams.get("path");
   if (!path) return NextResponse.json({ error: "path is required" }, { status: 400 });
   clearNoteChat(path);
   return new NextResponse(null, { status: 204 });
 }
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const { path, content, message = "", attachments: attachmentIds, webSearch = true } = (await req.json()) as {
     path?: string;
     content?: string;
@@ -172,3 +173,8 @@ async function noteContext(path: string, content: string, notes: NoteInfo[]): Pr
     (others.length ? `<other_notes>\n${others.map((n) => n.path).join("\n")}\n</other_notes>\n\n` : "")
   );
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const GET = sandboxed(handleGET);
+export const DELETE = sandboxed(handleDELETE);
+export const POST = sandboxed(handlePOST);

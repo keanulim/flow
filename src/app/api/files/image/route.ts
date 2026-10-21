@@ -1,3 +1,4 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
 import { IMAGE_FILE } from "@/lib/notes";
 import { saveImage, VaultError } from "@/lib/vault";
@@ -5,7 +6,7 @@ import { saveImage, VaultError } from "@/lib/vault";
 const MAX_BYTES = 25 * 1024 * 1024;
 
 /** Add an image to the vault (pasted or dropped into a note): multipart { folder, file }. Returns { path }. */
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const form = await req.formData().catch(() => null);
   const file = form?.get("file");
   const folder = form?.get("folder");
@@ -20,3 +21,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Couldn't save the image" }, { status: 500 });
   }
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const POST = sandboxed(handlePOST);

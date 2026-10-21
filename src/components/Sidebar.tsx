@@ -20,6 +20,8 @@ const ON = "bg-hover text-fg";
 const OFF = "text-muted hover:bg-hover hover:text-fg";
 
 type Props = {
+  /** The public demo: show a note that replies are simulated and changes are private and temporary. */
+  demo?: boolean;
   /**
    * What the sidebar shows. "home": nothing below the buttons (Home is a page
    * of its own; a search still lists results). "files": the file tree.
@@ -212,7 +214,15 @@ export default function Sidebar(p: Props) {
         </div>
       )}
 
-      <div className="mt-auto border-t border-line px-3 py-2">
+      {p.demo && (
+        <div className="mx-3 mt-auto mb-2 rounded-md border border-line px-2.5 py-2 text-[11px] leading-4 text-muted">
+          <span className="font-medium text-fg">Demo.</span> AI replies are simulated. Your notes and chats are private to you and reset after a while.{" "}
+          <a href="https://github.com/keanulim/flow" target="_blank" rel="noreferrer" className="underline hover:text-fg">
+            Code
+          </a>
+        </div>
+      )}
+      <div className={`${p.demo ? "" : "mt-auto "}border-t border-line px-3 py-2`}>
         <button
           onClick={p.onSettings}
           className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-muted hover:bg-hover hover:text-fg"

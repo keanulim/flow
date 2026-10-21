@@ -2,6 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { BuiltContext } from "./context";
+import { dataDir } from "./sandbox";
 import { type Attachment, attachmentKind, MAX_ATTACHMENT_BYTES } from "./shared";
 
 /**
@@ -11,7 +12,8 @@ import { type Attachment, attachmentKind, MAX_ATTACHMENT_BYTES } from "./shared"
  * request includes the message, since the API keeps nothing between requests.
  */
 
-const DIR = path.join(path.dirname(process.env.FLOW_DB_PATH ?? path.join(process.cwd(), "data", "flow.db")), "attachments");
+/** data/attachments, or the sandbox's (demo mode). */
+const attachmentsDir = () => path.join(dataDir(), "attachments");
 const ID = /^[0-9a-f-]{36}$/;
 
 export class AttachmentError extends Error {}
@@ -29,9 +31,9 @@ export async function saveAttachment(file: File): Promise<Attachment> {
     type: kind === "text" ? "text/plain" : kind === "pdf" ? "application/pdf" : file.type,
     size: bytes.length,
   };
-  await fs.mkdir(DIR, { recursive: true });
-  await fs.writeFile(path.join(DIR, meta.id), bytes);
-  await fs.writeFile(path.join(DIR, `${meta.id}.json`), JSON.stringify(meta));
+  await fs.mkdir(attachmentsDir(), { recursive: true });
+  await fs.writeFile(path.join(attachmentsDir(), meta.id), bytes);
+  await fs.writeFile(path.join(attachmentsDir(), `${meta.id}.json`), JSON.stringify(meta));
   return meta;
 }
 
@@ -39,7 +41,7 @@ export async function saveAttachment(file: File): Promise<Attachment> {
 export async function getAttachment(id: string): Promise<Attachment | null> {
   if (!ID.test(id)) return null;
   try {
-    return JSON.parse(await fs.readFile(path.join(DIR, `${id}.json`), "utf8")) as Attachment;
+    return JSON.parse(await fs.readFile(path.join(attachmentsDir(), `${id}.json`), "utf8")) as Attachment;
   } catch {
     return null;
   }
@@ -60,7 +62,7 @@ export async function resolveAttachments(ids: unknown): Promise<Attachment[] | n
 
 export async function readAttachment(id: string): Promise<Buffer> {
   if (!ID.test(id)) throw new AttachmentError("bad attachment id");
-  return fs.readFile(path.join(DIR, id));
+  return fs.readFile(path.join(attachmentsDir(), id));
 }
 
 /**
@@ -117,7 +119,7 @@ export async function attachFiles(ctx: BuiltContext): Promise<BuiltContext> {
 export async function pruneAttachments(referenced: Set<string>): Promise<number> {
   let names: string[];
   try {
-    names = await fs.readdir(DIR);
+    names = await fs.readdir(attachmentsDir());
   } catch {
     return 0;
   }
@@ -125,7 +127,7 @@ export async function pruneAttachments(referenced: Set<string>): Promise<number>
   let removed = 0;
   for (const name of names) {
     if (!ID.test(name) || referenced.has(name)) continue;
-    const file = path.join(DIR, name);
+    const file = path.join(attachmentsDir(), name);
     const stat = await fs.stat(file).catch(() => null);
     if (!stat || stat.mtimeMs > dayAgo) continue;
     await fs.rm(file, { force: true });

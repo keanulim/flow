@@ -59,6 +59,23 @@ Then open http://localhost:3000.
 
 Your data stays local. Chats live in SQLite (`data/flow.db`), uploads in `data/attachments/`, and notes in `data/vault/` (or your own vault). All of it is git-ignored.
 
+## Public demo
+
+Flow has a demo mode for sharing it with people (say, on a resume) without your API key or your notes:
+
+- **AI replies are simulated**, always, even if an API key is set. The demo can't cost anything.
+- **Every visitor gets a private sandbox** seeded with sample chats and notes (from `demo/`), so nobody sees anyone else's changes. Sandboxes live in temporary storage and are deleted after 6 hours unused.
+
+Turn it on with the environment variable `FLOW_DEMO=1`.
+
+**Deploying to Vercel:** import the GitHub repo at [vercel.com/new](https://vercel.com/new), add the environment variable `FLOW_DEMO` = `1` (and *don't* add `ANTHROPIC_API_KEY`), then deploy. Every push to `main` redeploys.
+
+To try demo mode locally without disturbing the dev server:
+
+```bash
+NEXT_DIST_DIR=.next-demo FLOW_DEMO=1 npx next build && NEXT_DIST_DIR=.next-demo FLOW_DEMO=1 npx next start -p 3001
+```
+
 ## Keyboard
 
 The full list is in Settings (`⌘,`). The ones you'll actually use:

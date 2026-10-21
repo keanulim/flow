@@ -1,7 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { BuiltContext } from "./context";
 import { type EditInput, applyEdit } from "./note-edit";
+import { DEMO } from "./sandbox";
 import { type ChatEvent, REFUSAL_NOTE, type Source, TRUNCATED_NOTE } from "./shared";
+
+/** Call Claude for real? Not without a key, not when a mock is asked for, and never in the public demo (it would spend your money). */
+const realModel = (mock?: unknown) => !!process.env.ANTHROPIC_API_KEY && !mock && !DEMO;
 
 // Everything runs on Haiku 5.5 (fast and cheap). To go back to Sonnet, set
 // MODEL to "claude-sonnet-5-5" and see the notes on WEB_TOOLS and fallbacks below.
@@ -30,7 +34,7 @@ export type StreamOptions = {
 
 /** Streams the reply as events (text, status, sources); returns token usage when done. */
 export function streamReply(ctx: BuiltContext, opts: StreamOptions = {}): AsyncGenerator<ChatEvent, Usage | null> {
-  return process.env.ANTHROPIC_API_KEY && !opts.mock ? streamClaude(ctx, opts) : streamMock(ctx, opts);
+  return realModel(opts.mock) ? streamClaude(ctx, opts) : streamMock(ctx, opts);
 }
 
 // Created on first use, not at import: if the key is added to .env.local while
@@ -221,7 +225,9 @@ async function* streamMock({ messages, inheritedUntil }: BuiltContext, { signal,
     await wait(800);
   }
   const lines = [
-    `**Mock mode** (set \`ANTHROPIC_API_KEY\` in \`.env.local\` for real replies). This thread sent **${messages.length}** messages:`,
+    DEMO
+      ? `**Demo:** replies here are simulated (the real app uses Claude). This one shows what Flow sends the model: this thread's **${messages.length}** messages. Side questions only see the conversation up to where they branched.`
+      : `**Mock mode** (set \`ANTHROPIC_API_KEY\` in \`.env.local\` for real replies). This thread sent **${messages.length}** messages:`,
     "",
     ...messages.map((m, i) => {
       const preview = textOf(m.content).replace(/\s+/g, " ").slice(0, 80);
@@ -260,7 +266,7 @@ export type CompleteOptions = {
  * background jobs like summarizing a chat into a note.
  */
 export async function* streamCompletion({ system, prompt, maxTokens, mock, signal }: CompleteOptions): AsyncGenerator<string> {
-  if (!process.env.ANTHROPIC_API_KEY || mock) {
+  if (!realModel(mock)) {
     for (const word of mockSummary(prompt).split(/(?<=\s)/)) {
       signal?.throwIfAborted();
       yield word;
@@ -297,13 +303,13 @@ function mockSummary(prompt: string): string {
     const i = lines.findIndex((l) => l.toLowerCase().includes(excerpt.toLowerCase()));
     if (i >= 0) lines[i] += ` ${marker}`;
   }
-  const notes = `_(Mock summary: set \`ANTHROPIC_API_KEY\` for a real one.)_\n\n${lines.join("\n") || "- (empty chat)"}`;
+  const notes = `_(${DEMO ? "Demo: a simulated summary; the real app writes one with Claude" : "Mock summary: set \`ANTHROPIC_API_KEY\` for a real one"}.)_\n\n${lines.join("\n") || "- (empty chat)"}`;
   return /Start your reply with one line "Title: \.\.\."/.test(prompt) ? `Title: Mock title\n\n${notes}` : notes;
 }
 
 /** A short, whole reply from the fast model, for small jobs like naming a chat. */
 export async function quickText({ system, prompt, maxTokens, mock }: Omit<CompleteOptions, "signal">): Promise<string> {
-  if (!process.env.ANTHROPIC_API_KEY || mock) {
+  if (!realModel(mock)) {
     const first = /^User: (.+)$/m.exec(prompt)?.[1] ?? "chat";
     return `Mock: ${first.split(/\s+/).slice(0, 4).join(" ")}`;
   }
@@ -385,7 +391,7 @@ export async function* streamNoteAssistant(
   { history, message, files = [], note, path, context, readNote, createNote, webSearch }: NoteAssistantInput,
   { signal, mock }: Omit<StreamOptions, "webSearch"> = {},
 ): AsyncGenerator<ChatEvent, { note: string; changed: boolean }> {
-  if (!process.env.ANTHROPIC_API_KEY || mock) return yield* mockNoteAssistant(message, note, context, files.length, createNote);
+  if (!realModel(mock)) return yield* mockNoteAssistant(message, note, context, files.length, createNote);
   client ??= new Anthropic();
   let current = note;
   let changed = false;
@@ -568,7 +574,7 @@ async function* mockNoteAssistant(
   if (edits) {
     yield { type: "status", text: "Editing the note" };
     await new Promise((r) => setTimeout(r, 600));
-    current = `${note.replace(/\s*$/, "")}\n\n- (mock edit) ${message.slice(0, 60)}\n`;
+    current = `${note.replace(/\s*$/, "")}\n\n- (${DEMO ? "demo" : "mock"} edit) ${message.slice(0, 60)}\n`;
     yield { type: "note", content: current };
   }
   // Asked for a page: make one and link it, like the real assistant would.
@@ -584,7 +590,9 @@ async function* mockNoteAssistant(
   }
   const saw = (linked.length ? ` I could see the linked notes: ${linked.join(", ")}.` : "") + (fileCount ? ` You attached ${fileCount} file${fileCount > 1 ? "s" : ""}.` : "");
   const did = made ? `created [[${made}]] and linked it.` : edits ? "added a line to the end of the note." : "";
-  const reply = (did ? `**Mock mode:** ${did}` : "**Mock mode:** set `ANTHROPIC_API_KEY` for real answers.") + saw;
+  const label = DEMO ? "**Demo (simulated):**" : "**Mock mode:**";
+  const idle = DEMO ? "the real assistant (Claude) would answer here. Try asking it to add, list or make a page." : "set `ANTHROPIC_API_KEY` for real answers.";
+  const reply = `${label} ${did || idle}` + saw;
   for (const word of reply.split(/(?<=\s)/)) {
     yield { type: "text", text: word };
     await new Promise((r) => setTimeout(r, 15));

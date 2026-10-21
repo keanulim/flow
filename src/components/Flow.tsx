@@ -36,7 +36,8 @@ const HOME_PATH = `${HOME_NOTE}.md`;
  * live in hooks (conversation, streaming, vault, chat index); this component
  * connects them, owns moving between Home and chats, and lays out the page.
  */
-export default function Flow() {
+/** `demo`: the public demo (FLOW_DEMO=1): simulated AI, a private sandbox per visitor. */
+export default function Flow({ demo = false }: { demo?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [home, setHome] = useState(false); // the main area shows a note instead of a conversation
@@ -468,11 +469,16 @@ export default function Flow() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selection, fork, focus, focusMessages, rootId, goTo, goUp, showSide, setSideOpen, sideThreads, sideId, openThread, home, noteHistory, goBack]);
 
-  // Keep the center pinned to the bottom while it streams (only if already near the bottom).
+  // When a reply starts (you just sent something), jump to the bottom so you see your message and the reply.
+  // While it streams, stay pinned to the bottom only if you're near it, so you can scroll up and read.
+  const wasStreaming = useRef(false);
   useEffect(() => {
     const el = mainScroll.current;
-    if (!el || !focus || streaming[focus] === undefined) return;
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
+    const now = !!focus && streaming[focus] !== undefined;
+    const started = now && !wasStreaming.current;
+    wasStreaming.current = now;
+    if (!el || !now) return;
+    if (started || el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
   }, [streaming, focus]);
 
   // The Home note is reached with the Home button, not listed with the other files;
@@ -498,6 +504,7 @@ export default function Flow() {
   return (
     <div className="flex h-dvh text-[15px]">
       <Sidebar
+        demo={demo}
         view={onHomeNote ? "home" : filesSide ? "files" : "chats"}
         filesSide={filesSide}
         query={query}

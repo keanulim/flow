@@ -1,4 +1,5 @@
 import { embeddedImages, listNotes, listOtherFiles, resolveFile } from "./notes";
+import { currentSandbox } from "./sandbox";
 import { listVault, readNote, restoreFromTrash, trashEntry, writeNote } from "./vault";
 
 /**
@@ -14,13 +15,21 @@ import { listVault, readNote, restoreFromTrash, trashEntry, writeNote } from "./
 // Image path -> its name in .trash, for putting it back. Kept on globalThis so
 // it survives dev hot reloads; it's in memory only (a restart forgets it, and
 // the files stay in .trash as with any delete).
-const g = globalThis as unknown as { flowTrashedImages?: Map<string, string> };
-const trashed = (g.flowTrashedImages ??= new Map());
+// One memory per sandbox in demo mode ("" = the normal vault).
+const g = globalThis as unknown as { flowTrashedImages?: Map<string, Map<string, string>> };
+const memories = (g.flowTrashedImages ??= new Map());
+const trashedHere = () => {
+  const key = currentSandbox() ?? "";
+  let m = memories.get(key);
+  if (!m) memories.set(key, (m = new Map()));
+  return m;
+};
 
 export type ImageChanges = { removed: string[]; restored: string[] };
 
 /** Save a note, then trash images it no longer shows (if no other note does) and restore any it shows again. */
 export async function saveNote(path: string, content: string): Promise<ImageChanges> {
+  const trashed = trashedHere();
   const before = await readNote(path).catch(() => "");
   await writeNote(path, content);
   const was = embeddedImages(before);

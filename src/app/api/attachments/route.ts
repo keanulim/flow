@@ -1,9 +1,10 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
 import { AttachmentError, pruneAttachments, saveAttachment } from "@/lib/attachments";
 import { referencedAttachmentIds } from "@/lib/db";
 
 /** Upload one file (multipart field "file") to attach to a message. Returns its Attachment. */
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const file = (await req.formData().catch(() => null))?.get("file");
   if (!(file instanceof File)) return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
   try {
@@ -17,3 +18,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Couldn't save the file" }, { status: 500 });
   }
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const POST = sandboxed(handlePOST);

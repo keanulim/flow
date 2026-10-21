@@ -1,0 +1,67 @@
+[
+  {
+    "id": "6f1c2a3e-8b4d-4e5f-9a0b-1c2d3e4f5a61",
+    "title": "How HTTPS keeps data private",
+    "messages": [
+      { "role": "user", "content": "How does HTTPS actually keep my data private? Keep it short." },
+      {
+        "role": "assistant",
+        "content": "HTTPS is HTTP sent through an encrypted **TLS** connection. Three things happen before any of your data is sent:\n\n1. **Identity.** The server shows a certificate signed by a certificate authority your browser already trusts, which proves you're talking to the real site.\n2. **Key exchange.** During the TLS handshake, your browser and the server agree on a fresh secret key, without ever sending that key over the network.\n3. **Encryption.** Everything after that is encrypted with the shared key, so anyone in between sees only scrambled bytes.\n\nThe result: an eavesdropper on the same Wi-Fi can see *which* site you're visiting, but not what you send or receive."
+      },
+      { "role": "user", "content": "So why does the padlock sometimes say \"not secure\"?" },
+      {
+        "role": "assistant",
+        "content": "Usually one of three reasons:\n\n- **No HTTPS at all.** The page is plain HTTP, so nothing is encrypted.\n- **A certificate problem.** It's expired, issued for a different domain, or not signed by a trusted authority.\n- **Mixed content.** The page is HTTPS, but it loads some images or scripts over plain HTTP, which could be tampered with.\n\nBrowsers flag all three because any one of them lets someone in the middle read or change what you see."
+      }
+    ],
+    "branches": [
+      {
+        "id": "6f1c2a3e-8b4d-4e5f-9a0b-1c2d3e4f5a62",
+        "title": "How two computers agree on a secret",
+        "anchor": "agree on a fresh secret key, without ever sending that key over the network",
+        "from": 1,
+        "messages": [
+          { "role": "user", "content": "How can they agree on a key without sending it?" },
+          {
+            "role": "assistant",
+            "content": "With a **Diffie-Hellman** key exchange. Each side picks a private random number and sends only a public value derived from it. Combining *your* private number with *their* public value gives the same result on both sides, but an eavesdropper who sees only the two public values can't work it out.\n\nA classic analogy is mixing paint: it's easy to mix two colors, and practically impossible to un-mix them."
+          }
+        ]
+      },
+      {
+        "id": "6f1c2a3e-8b4d-4e5f-9a0b-1c2d3e4f5a63",
+        "title": "Who they are",
+        "kind": "oneoff",
+        "anchor": "certificate authority",
+        "from": 1,
+        "messages": [
+          { "role": "user", "content": "Who are certificate authorities?" },
+          { "role": "assistant", "content": "Organizations like Let's Encrypt or DigiCert that check a site owns its domain, then sign its certificate. Your browser and operating system ship with a list of the ones they trust." }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "6f1c2a3e-8b4d-4e5f-9a0b-1c2d3e4f5a64",
+    "title": "Binary search, step by step",
+    "messages": [
+      { "role": "user", "content": "Explain binary search with a tiny code example." },
+      {
+        "role": "assistant",
+        "content": "Binary search finds a value in a **sorted** list by repeatedly halving the range it could be in.\n\n```python\ndef binary_search(items, target):\n    lo, hi = 0, len(items) - 1\n    while lo <= hi:\n        mid = (lo + hi) // 2\n        if items[mid] == target:\n            return mid\n        if items[mid] < target:\n            lo = mid + 1\n        else:\n            hi = mid - 1\n    return -1\n```\n\nEach step throws away half of what's left, so a list of $n$ items takes at most about $\\log_2 n$ steps: around 20 steps for a million items."
+      }
+    ],
+    "branches": [
+      {
+        "id": "6f1c2a3e-8b4d-4e5f-9a0b-1c2d3e4f5a65",
+        "title": "Why it's log n",
+        "anchor": "Each step throws away half of what's left",
+        "from": 1,
+        "messages": [
+          { "role": "user", "content": "Why does halving give log n?" },
+          { "role": "assistant", "content": "After $k$ steps, $n / 2^k$ items are left. The search ends when that reaches 1, so $2^k = n$, which means $k = \\log_2 n$." }
+        ]
+      }
+    ]
+  }
+]

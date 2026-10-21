@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
+import { dbPath } from "./sandbox";
 import type { Attachment } from "./shared";
 
 export type Role = "user" | "assistant";
@@ -28,15 +29,37 @@ export type Message = {
   attachments?: Attachment[];
 };
 
-const DB_PATH = process.env.FLOW_DB_PATH ?? path.join(process.cwd(), "data", "flow.db");
+// One connection per database file: normally just data/flow.db; in demo mode,
+// one per visitor's sandbox (see sandbox.ts). Next.js dev mode re-evaluates
+// modules on every hot reload, so they're kept on globalThis rather than reopened.
+const g = globalThis as unknown as { flowDbs?: Map<string, Database.Database> };
+const connections = (g.flowDbs ??= new Map());
 
-// Next.js dev mode re-evaluates modules on every hot reload. Stashing the
-// connection on globalThis keeps us from opening a new handle each time.
-const g = globalThis as unknown as { flowDb?: Database.Database };
+/** The database for this request (its sandbox's in demo mode). */
+function conn(): Database.Database {
+  const file = dbPath();
+  let db = connections.get(file);
+  if (!db) {
+    db = open(file);
+    connections.set(file, db);
+  }
+  if (!migrated.has(db)) {
+    migrate(db);
+    migrated.add(db);
+  }
+  return db;
+}
+const migrated = new WeakSet<Database.Database>();
 
-function open(): Database.Database {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  const db = new Database(DB_PATH);
+/** Close a sandbox's database (before its folder is deleted). */
+export function closeDb(file: string) {
+  connections.get(file)?.close();
+  connections.delete(file);
+}
+
+function open(file: string): Database.Database {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = new Database(file);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(`
@@ -63,9 +86,9 @@ function open(): Database.Database {
 
 /**
  * Columns added after a database was first created. CREATE TABLE IF NOT EXISTS
- * won't touch an existing table, so new columns are added here. Runs on every
- * module load (not inside open()), because in dev the connection is reused
- * across hot reloads and open() wouldn't run again.
+ * won't touch an existing table, so new columns are added here. Runs once per
+ * connection per module load (not inside open()), because in dev the
+ * connection is reused across hot reloads and open() wouldn't run again.
  */
 function migrate(db: Database.Database) {
   const cols = new Set((db.prepare(`PRAGMA table_info(threads)`).all() as { name: string }[]).map((c) => c.name));
@@ -90,8 +113,6 @@ function migrate(db: Database.Database) {
   if (!noteCols.has("attachments")) db.exec(`ALTER TABLE note_chat_messages ADD COLUMN attachments TEXT`);
 }
 
-export const db = (g.flowDb ??= open());
-migrate(db);
 
 const threadCols = `id, parent_thread_id AS parentThreadId, fork_message_id AS forkMessageId,
   anchor_text AS anchorText, title, kind, created_at AS createdAt`;
@@ -105,32 +126,32 @@ function toMessage(row: Omit<Message, "attachments"> & { attachments: string | n
 type MessageRow = Parameters<typeof toMessage>[0];
 
 export function getThread(id: string): Thread | undefined {
-  return db.prepare(`SELECT ${threadCols} FROM threads WHERE id = ?`).get(id) as Thread | undefined;
+  return conn().prepare(`SELECT ${threadCols} FROM threads WHERE id = ?`).get(id) as Thread | undefined;
 }
 
 export function getMessages(threadId: string): Message[] {
-  return db
+  return conn()
     .prepare(`SELECT ${messageCols} FROM messages WHERE thread_id = ? ORDER BY created_at, rowid`)
     .all(threadId)
     .map((r) => toMessage(r as MessageRow));
 }
 
 export function listConversations(): Thread[] {
-  return db
+  return conn()
     .prepare(`SELECT ${threadCols} FROM threads WHERE parent_thread_id IS NULL ORDER BY created_at DESC`)
     .all() as Thread[];
 }
 
 /** Every thread (main chats and branches), for linking to chats from notes. Titles only, no messages. */
 export function listAllThreads(): Pick<Thread, "id" | "parentThreadId" | "title" | "kind">[] {
-  return db
+  return conn()
     .prepare(`SELECT id, parent_thread_id AS parentThreadId, title, kind FROM threads ORDER BY created_at DESC`)
     .all() as Pick<Thread, "id" | "parentThreadId" | "title" | "kind">[];
 }
 
 /** The main thread a thread belongs to (itself if it is one), or undefined if it doesn't exist. */
 export function getRootId(id: string): string | undefined {
-  const row = db
+  const row = conn()
     .prepare(
       `WITH RECURSIVE up(id, parent) AS (
          SELECT id, parent_thread_id FROM threads WHERE id = ?
@@ -150,7 +171,7 @@ export function getRootId(id: string): string | undefined {
  */
 export function searchConversations(query: string): string[] {
   const like = `%${query.replace(/[\\%_]/g, (c) => "\\" + c)}%`; // match literally, % and _ included
-  const rows = db
+  const rows = conn()
     .prepare(
       `WITH RECURSIVE
          hits(id) AS (
@@ -171,7 +192,7 @@ export function searchConversations(query: string): string[] {
 
 /** A main thread plus every thread descended from it, with all their messages. */
 export function getConversation(rootId: string): { threads: Thread[]; messages: Message[] } {
-  const threads = db
+  const threads = conn()
     .prepare(
       `WITH RECURSIVE tree(id) AS (
          SELECT id FROM threads WHERE id = ?
@@ -183,7 +204,7 @@ export function getConversation(rootId: string): { threads: Thread[]; messages: 
     .all(rootId) as Thread[];
   const ids = threads.map((t) => t.id);
   const messages = ids.length
-    ? (db
+    ? (conn()
         .prepare(
           `SELECT ${messageCols} FROM messages WHERE thread_id IN (${ids.map(() => "?").join(",")})
            ORDER BY created_at, rowid`,
@@ -195,6 +216,8 @@ export function getConversation(rootId: string): { threads: Thread[]; messages: 
 }
 
 export function createThread(input: {
+  /** Normally random; set for seeded demo chats, so notes can link to them. */
+  id?: string;
   parentThreadId?: string | null;
   forkMessageId?: string | null;
   anchorText?: string | null;
@@ -202,7 +225,7 @@ export function createThread(input: {
   kind?: ThreadKind;
 }): Thread {
   const thread: Thread = {
-    id: crypto.randomUUID(),
+    id: input.id ?? crypto.randomUUID(),
     parentThreadId: input.parentThreadId ?? null,
     forkMessageId: input.forkMessageId ?? null,
     anchorText: input.anchorText ?? null,
@@ -210,7 +233,7 @@ export function createThread(input: {
     kind: input.kind ?? "thread",
     createdAt: Date.now(),
   };
-  db.prepare(
+  conn().prepare(
     `INSERT INTO threads (id, parent_thread_id, fork_message_id, anchor_text, title, kind, created_at)
      VALUES (@id, @parentThreadId, @forkMessageId, @anchorText, @title, @kind, @createdAt)`,
   ).run(thread);
@@ -218,29 +241,29 @@ export function createThread(input: {
 }
 
 export function renameThread(id: string, title: string) {
-  db.prepare(`UPDATE threads SET title = ? WHERE id = ?`).run(title, id);
+  conn().prepare(`UPDATE threads SET title = ? WHERE id = ?`).run(title, id);
 }
 
 /** Whether a thread still has its placeholder title (a main chat's first message, a branch's highlighted text). */
 export function needsTitle(id: string): boolean {
-  const row = db.prepare(`SELECT auto_titled AS titled FROM threads WHERE id = ?`).get(id) as { titled: number } | undefined;
+  const row = conn().prepare(`SELECT auto_titled AS titled FROM threads WHERE id = ?`).get(id) as { titled: number } | undefined;
   return row?.titled === 0;
 }
 
 /** A name the user chose. Marked as titled, so automatic titles never replace it. */
 export function setTitle(id: string, title: string) {
-  db.prepare(`UPDATE threads SET title = ?, auto_titled = 1 WHERE id = ?`).run(title, id);
+  conn().prepare(`UPDATE threads SET title = ?, auto_titled = 1 WHERE id = ?`).run(title, id);
 }
 
 /** Save a model-written title for a thread. */
 export function setAutoTitle(id: string, title: string) {
-  db.prepare(`UPDATE threads SET title = ?, auto_titled = 1 WHERE id = ?`).run(title, id);
+  conn().prepare(`UPDATE threads SET title = ?, auto_titled = 1 WHERE id = ?`).run(title, id);
 }
 
 /** Threads (chats and branches) that still have a placeholder title and at least one reply to summarize. */
 export function untitledThreads(): string[] {
   return (
-    db
+    conn()
       .prepare(
         `SELECT t.id FROM threads t
          WHERE t.auto_titled = 0
@@ -252,21 +275,21 @@ export function untitledThreads(): string[] {
 
 /** Promote a one-off to a regular side thread. One-way: anything in the map stays in the map. */
 export function saveToMap(id: string) {
-  db.prepare(`UPDATE threads SET kind = 'thread' WHERE id = ? AND kind = 'oneoff'`).run(id);
+  conn().prepare(`UPDATE threads SET kind = 'thread' WHERE id = ? AND kind = 'oneoff'`).run(id);
 }
 
 export function deleteThread(id: string) {
-  db.prepare(`DELETE FROM threads WHERE id = ?`).run(id);
+  conn().prepare(`DELETE FROM threads WHERE id = ?`).run(id);
 }
 
 /** Delete one message (and, through the schema's cascade, any side threads branched from it). */
 export function deleteMessage(id: string) {
-  db.prepare(`DELETE FROM messages WHERE id = ?`).run(id);
+  conn().prepare(`DELETE FROM messages WHERE id = ?`).run(id);
 }
 
 export function addMessage(threadId: string, role: Role, content: string, id: string = crypto.randomUUID(), attachments: Attachment[] = []): Message {
   const msg: Message = { id, threadId, role, content, createdAt: Date.now(), ...(attachments.length ? { attachments } : {}) };
-  db.prepare(
+  conn().prepare(
     `INSERT INTO messages (id, thread_id, role, content, created_at, attachments)
      VALUES (@id, @threadId, @role, @content, @createdAt, @attachments)`,
   ).run({ ...msg, attachments: attachments.length ? JSON.stringify(attachments) : null });
@@ -275,7 +298,7 @@ export function addMessage(threadId: string, role: Role, content: string, id: st
 
 /** Ids of every file some message still has attached (the rest can be deleted). */
 export function referencedAttachmentIds(): Set<string> {
-  const rows = db
+  const rows = conn()
     .prepare(`SELECT attachments FROM messages WHERE attachments IS NOT NULL UNION ALL SELECT attachments FROM note_chat_messages WHERE attachments IS NOT NULL`)
     .all() as { attachments: string }[];
   return new Set(rows.flatMap((r) => (JSON.parse(r.attachments) as Attachment[]).map((a) => a.id)));
@@ -287,7 +310,7 @@ export type NoteChatMessage = { id: string; role: Role; content: string; created
 
 export function getNoteChat(notePath: string): NoteChatMessage[] {
   return (
-    db
+    conn()
       .prepare(`SELECT id, role, content, created_at AS createdAt, attachments FROM note_chat_messages WHERE note_path = ? ORDER BY created_at, rowid`)
       .all(notePath) as (Omit<NoteChatMessage, "attachments"> & { attachments: string | null })[]
   ).map(({ attachments, ...m }) => (attachments ? { ...m, attachments: JSON.parse(attachments) as Attachment[] } : m));
@@ -295,7 +318,7 @@ export function getNoteChat(notePath: string): NoteChatMessage[] {
 
 export function addNoteChatMessage(notePath: string, role: Role, content: string, attachments: Attachment[] = []): NoteChatMessage {
   const msg = { id: crypto.randomUUID(), role, content, createdAt: Date.now(), ...(attachments.length ? { attachments } : {}) };
-  db.prepare(`INSERT INTO note_chat_messages (id, note_path, role, content, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?)`).run(
+  conn().prepare(`INSERT INTO note_chat_messages (id, note_path, role, content, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?)`).run(
     msg.id,
     notePath,
     role,
@@ -308,12 +331,12 @@ export function addNoteChatMessage(notePath: string, role: Role, content: string
 
 /** Start the note's conversation over. */
 export function clearNoteChat(notePath: string) {
-  db.prepare(`DELETE FROM note_chat_messages WHERE note_path = ?`).run(notePath);
+  conn().prepare(`DELETE FROM note_chat_messages WHERE note_path = ?`).run(notePath);
 }
 
 /** A note or folder was renamed or moved: its notes' conversations follow. */
 export function moveNoteChats(from: string, to: string) {
-  db.prepare(
+  conn().prepare(
     `UPDATE note_chat_messages SET note_path = ? || substr(note_path, length(?) + 1)
      WHERE note_path = ? OR note_path LIKE ? ESCAPE '\\'`,
   ).run(to, from, from, from.replace(/[\\%_]/g, (c) => "\\" + c) + "/%");
@@ -321,5 +344,5 @@ export function moveNoteChats(from: string, to: string) {
 
 /** A note or folder was deleted: so are its notes' conversations. */
 export function deleteNoteChats(notePath: string) {
-  db.prepare(`DELETE FROM note_chat_messages WHERE note_path = ? OR note_path LIKE ? ESCAPE '\\'`).run(notePath, notePath.replace(/[\\%_]/g, (c) => "\\" + c) + "/%");
+  conn().prepare(`DELETE FROM note_chat_messages WHERE note_path = ? OR note_path LIKE ? ESCAPE '\\'`).run(notePath, notePath.replace(/[\\%_]/g, (c) => "\\" + c) + "/%");
 }

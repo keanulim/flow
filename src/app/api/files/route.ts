@@ -1,3 +1,4 @@
+import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
 import { deleteNoteChats, moveNoteChats } from "@/lib/db";
 import { createEntry, listVault, moveEntry, placeEntry, trashEntry, VaultError } from "@/lib/vault";
@@ -15,10 +16,10 @@ async function handle(fn: () => Promise<unknown>) {
 }
 
 /** The vault's folder tree. */
-export const GET = () => handle(listVault);
+export const GET = sandboxed(() => handle(listVault));
 
 /** Create a note or folder: { parent, name, type }. Returns { path }. */
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const { parent = "", name, type } = (await req.json()) as { parent?: string; name: string; type: "file" | "folder" };
   return handle(async () => ({ path: await createEntry(parent, name, type === "folder" ? "folder" : "file") }));
 }
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
  * { from, folder, before } = in `folder`, just before the item named `before`
  * (null: at the end). Returns { path }.
  */
-export async function PATCH(req: Request) {
+async function handlePATCH(req: Request) {
   const { from, to, folder, before = null } = (await req.json()) as { from: string; to?: string; folder?: string; before?: string | null };
   return handle(async () => {
     const path = typeof folder === "string" ? await placeEntry(from, folder, before) : await moveEntry(from, to ?? "");
@@ -38,7 +39,7 @@ export async function PATCH(req: Request) {
 }
 
 /** Move a note or folder to the vault's .trash. */
-export async function DELETE(req: Request) {
+async function handleDELETE(req: Request) {
   const p = new URL(req.url).searchParams.get("path") ?? "";
   return handle(async () => {
     await trashEntry(p);
@@ -46,3 +47,8 @@ export async function DELETE(req: Request) {
     return undefined;
   });
 }
+
+// In demo mode, each visitor works in their own sandbox (lib/sandbox.ts).
+export const POST = sandboxed(handlePOST);
+export const PATCH = sandboxed(handlePATCH);
+export const DELETE = sandboxed(handleDELETE);
