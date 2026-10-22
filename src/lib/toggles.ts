@@ -33,7 +33,7 @@ const OPEN = /^\s*<details(\s+open)?\s*>\s*$/i;
 const SUMMARY = /^(\s*<summary>)(.*?)(<\/summary>\s*)$/i;
 const CLOSE = /^\s*<\/details>\s*$/i;
 const FENCE = /^\s*(```|~~~)/;
-const INDENT = 1.55; // em per nesting level
+export const INDENT = 1.55; // em per nesting level
 const EVENT = "toggle"; // userEvent prefix for our own edits (allowed past the protection)
 
 export type Toggle = {

@@ -17,7 +17,8 @@
     "test:links": "tsx scripts/link-test.ts",
     "test:annotations": "tsx scripts/annotation-test.ts",
     "test:note-images": "tsx scripts/note-images-test.ts",
-    "test:order": "tsx scripts/order-test.ts"
+    "test:order": "tsx scripts/order-test.ts",
+    "test:relink": "tsx scripts/relink-test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",

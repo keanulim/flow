@@ -74,7 +74,10 @@ export default function Flow({ demo = false }: { demo?: boolean }) {
   const { focus, focusMessages, sideThreads, sideId, showSide, setSideOpen } = conv;
   const { goTo, openThread, goUp, reveal, fork } = conv;
 
-  const vault = useVault(report);
+  // A rename or move rewrote links on disk: if the open note was one of them, load it again
+  // (its editor still has the old text, and would save it back over the fix).
+  const onRelinked = useRef<() => void>(() => {});
+  const vault = useVault(report, () => onRelinked.current());
   const { files, loadFiles, openNote, openFresh, noteHistory, goBack, editor, noteList, resolveLink, openLink, resolveEmbed, addImage } = vault;
   const { loadChatIndex, chatOptions, chatExists } = useChatIndex(report);
 
@@ -291,6 +294,7 @@ export default function Flow({ demo = false }: { demo?: boolean }) {
     [openNote],
   );
   const reloadNote = useCallback(() => setNoteVersion((v) => v + 1), []);
+  onRelinked.current = reloadNote;
 
   const makeNote = useCallback(
     async (threadId: string) => {

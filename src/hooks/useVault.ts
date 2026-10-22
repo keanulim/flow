@@ -15,9 +15,14 @@ const folderOf = (path: string) => (path.includes("/") ? path.slice(0, path.last
  * `editor` is the open note's editor; operations that leave or move a note
  * save its pending edits through it first.
  */
-export function useVault(report: (e: unknown) => void) {
+export function useVault(report: (e: unknown) => void, onOpenNoteRelinked?: () => void) {
+  // A rename or move rewrote links in the open note on disk: it must be loaded again.
+  const relinked = useRef(onOpenNoteRelinked);
+  relinked.current = onOpenNoteRelinked;
   const [files, setFiles] = useState<VaultEntry[] | null>(null); // null until first loaded
   const [openNote, setOpenNote] = useState<string | null>(null);
+  const openRef = useRef(openNote); // the open note right now, for async work started earlier
+  openRef.current = openNote;
   const [noteHistory, setNoteHistory] = useState<string[]>([]);
   const editor = useRef<NoteEditorHandle>(null);
 
@@ -161,10 +166,14 @@ export function useVault(report: (e: unknown) => void) {
     async (from: string, to: string) => {
       await editor.current?.flush(); // save pending edits under the old name first
       try {
-        const { path } = (await (
+        const { path, relinked: rewritten = [] } = (await (
           await api("/api/files", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from, to }) })
-        ).json()) as { path: string };
-        setOpenNote((open) => (open === from ? path : open?.startsWith(from + "/") ? path + open.slice(from.length) : open));
+        ).json()) as { path: string; relinked?: string[] };
+        const open = openRef.current;
+        const nowOpen = open === from ? path : open?.startsWith(from + "/") ? path + open.slice(from.length) : open;
+        openRef.current = nowOpen; // right away: a group move continues with the next item before React re-renders
+        setOpenNote(nowOpen);
+        if (nowOpen && rewritten.includes(nowOpen)) relinked.current?.();
       } catch (e) {
         report(e);
       }
@@ -194,10 +203,14 @@ export function useVault(report: (e: unknown) => void) {
       await editor.current?.flush(); // save pending edits under the old path first
       for (const from of froms) {
         try {
-          const { path } = (await (
+          const { path, relinked: rewritten = [] } = (await (
             await api("/api/files", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from, folder, before }) })
-          ).json()) as { path: string };
-          setOpenNote((open) => (open === from ? path : open?.startsWith(from + "/") ? path + open.slice(from.length) : open));
+          ).json()) as { path: string; relinked?: string[] };
+          const open = openRef.current;
+        const nowOpen = open === from ? path : open?.startsWith(from + "/") ? path + open.slice(from.length) : open;
+        openRef.current = nowOpen; // right away: a group move continues with the next item before React re-renders
+        setOpenNote(nowOpen);
+        if (nowOpen && rewritten.includes(nowOpen)) relinked.current?.();
         } catch (e) {
           report(e);
           break; // e.g. a name already taken there: stop rather than half-scatter the rest

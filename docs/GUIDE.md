@@ -202,6 +202,8 @@ Two ways to provide decorations, both used here:
 
 **Resolution** (shared by the editor and the assistant, so they always agree): a bare name prefers a note in the **same folder** as the current one, then the **shortest path**. A name containing `/` is treated as an exact path.
 
+**Renames and moves keep links working** (`relink.ts`, `test:relink`): every `[[link]]` and `![[embed]]` in the vault is resolved before and after the change, and any that would now point somewhere else (or nowhere) is rewritten to point where it did. Labels and `#headings` are kept, a link written as a path stays a path, a name now shared with another note becomes a path, and links in code are left alone. If the open note was rewritten, the editor reloads it, so its next save can't put the old links back.
+
 **Linking selected text:** ⌘K (or right-click → Link to…) opens a picker. With nothing typed, "New page" comes first, so ⌘K then Enter creates a page. Once you type, matches come first.
 
 ### 4.8 Toggles
@@ -364,6 +366,7 @@ All of this is git-ignored, so your data never ends up on GitHub.
 | `db.ts` | SQLite schema, migrations, queries. |
 | `shared.ts` | Types and constants used by both browser and server (events, reply markers, attachments). No server imports. |
 | `vault.ts` | The notes folder: list, read, write, create, move, trash, images, and the security boundary. |
+| `relink.ts` | Rewriting links after a rename or move so they keep pointing at the same notes and images. |
 | `notes.ts` | Notes by name: listing, `[[link]]` and embed resolution, linked pages. Shared by the editor and the assistant. |
 | `note-edit.ts` | Applies the text editor tool's commands to a note in memory. |
 | `note-images.ts` | Saving a note, and moving images it no longer shows to the trash (and back on undo). |
@@ -452,6 +455,7 @@ Plain scripts run with `tsx`; each prints PASS or FAIL per check.
 | `test:links` | The Markdown that linking selected text writes, including awkward characters. |
 | `test:annotations` | Adding, numbering, editing and removing notes on text; multi-line notes; code left alone. |
 | `test:note-images` | Images removed from a page go to the trash unless another note shows them; undo and cut-and-paste restore them. |
+| `test:relink` | Links after renames and moves: labels, headings, embeds, folders, name clashes, code left alone. |
 | `test:order` | Arranging files: saved order, moves between folders, renames keeping their spot, deletes, nothing outside the vault. |
 
 Browser checks happen in the preview with **mock mode** (free). Real API checks are kept to single, cheap requests.
@@ -513,6 +517,7 @@ Real bugs from building this, with what each one teaches.
 | Oct 15 | Notes workspace; chats to notes; live note writing; chat links; one rendered editor; themes; streaming fade-in; hooks and components split; AI titles; chat rename and delete. |
 | Oct 17 | Note assistant (edits, reads notes, web search, attachments); chat web search; uploads; math; images in notes; page creation; sidebar redesign; Neon theme; README rewrite. |
 | Oct 19 | Link selected words to pages, chats or web pages; chat fade. |
+| Oct 21 | Renames and moves keep links working. Math in tables; code blocks line up inside toggles. |
 | Oct 21 | Demo mode for a public deployment: simulated AI, a private seeded sandbox per visitor, synced through Redis on Vercel. Next.js and React security patches. |
 | Oct 20 | Notes on text: highlight words, attach a note, click to see it. Everything switched to Haiku 5.5. Fixed math rendering in chats and accented letters (θ̂). Images removed from pages go to the trash. Drag to arrange files. |
 | | *Add new entries here.* |
@@ -524,7 +529,6 @@ Real bugs from building this, with what each one teaches.
 Offered or discussed, not built yet. Roughly by value.
 
 - **User testing.** Have 5 to 10 people use Flow for a week; note what confuses them. This would also give real numbers for a resume.
-- **Update links on rename.** Renaming a note or image doesn't update links to it (Obsidian does).
 - **The assistant sees embedded images** in the note, like chat attachments.
 - **Notion import.** Read Notion's Markdown and CSV export, strip the IDs from filenames, convert links and toggles.
 - **The fade in the side panel and assistant panel.**

@@ -7,7 +7,7 @@ import { tags } from "@lezer/highlight";
 import katex from "katex";
 import { ACCENTED } from "./accents";
 import { DISPLAY_LINE, DISPLAY_OPEN, displayClose, findInlineMath } from "./math";
-import { indent, parseToggles, toggles } from "./toggles";
+import { INDENT, indent, parseToggles, toggles } from "./toggles";
 import { annotations } from "./annotations";
 import { type LinkHost, wikilinks } from "./wikilinks";
 
@@ -52,6 +52,7 @@ export function build(state: EditorState): DecorationSet {
   const active = activeLines(state);
   const decos: Range<Decoration>[] = [];
   let inFence = false;
+  const toggleLines = parseToggles(doc).lines;
 
   for (let n = 1; n <= doc.lines; n++) {
     const line = doc.line(n);
@@ -63,7 +64,13 @@ export function build(state: EditorState): DecorationSet {
       const edge = FENCE.test(text) ? (opening ? " cm-md-fence-open" : " cm-md-fence-close") : "";
       // Off the cursor, the ``` lines are just the box's top and bottom padding.
       const hideMarker = edge && !active.has(n);
-      decos.push(Decoration.line({ class: `cm-md-fence${edge}${hideMarker ? " cm-md-fence-edge" : ""}` }).range(line.from));
+      // Inside a toggle, the whole box moves to the toggle's indent. (A toggle indents its lines with
+      // padding, which the box's own padding would override, so here it's a margin. The box's text is
+      // smaller (0.875em), hence dividing to get the toggle's em.)
+      const inToggle = toggleLines.get(n);
+      const level = inToggle?.role === "body" ? inToggle.toggle.depth + 1 : 0;
+      const attributes = level ? { style: `margin-left:calc(${level * INDENT}em / 0.875);background-image:none !important` } : undefined;
+      decos.push(Decoration.line({ class: `cm-md-fence${edge}${hideMarker ? " cm-md-fence-edge" : ""}`, attributes }).range(line.from));
       if (hideMarker && line.length) decos.push(Decoration.replace({}).range(line.from, line.to));
       continue;
     }
@@ -389,8 +396,21 @@ function cells(line: string): string[] {
   return parts.map((c) => c.trim().replace(/\\\|/g, "|"));
 }
 
-/** Inline Markdown in a table cell -> safe HTML (text is escaped first). */
+/** Inline Markdown in a table cell -> safe HTML (text is escaped first; math is drawn by KaTeX). */
 export function inlineHtml(md: string): string {
+  const maths = findInlineMath(md);
+  if (!maths.length) return formatCell(md);
+  let html = "";
+  let at = 0;
+  for (const m of maths) {
+    html += formatCell(md.slice(at, m.from)) + katex.renderToString(m.tex, { throwOnError: false });
+    at = m.to;
+  }
+  return html + formatCell(md.slice(at));
+}
+
+/** Bold, italics, code, strikethrough and [[links]] in a cell's text, escaped. */
+function formatCell(md: string): string {
   return md
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
