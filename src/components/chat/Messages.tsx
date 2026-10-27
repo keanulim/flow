@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useRef, useState } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown, { type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -12,6 +12,7 @@ import { rehypeAccents } from "@/lib/accents";
 import { normalizeMath } from "@/lib/math";
 import { type Attachment, replyWentWrong } from "@/lib/shared";
 import { formatBytes, uploadAttachment } from "@/lib/upload";
+import { COMPOSER_RESIZED } from "@/hooks/useStickToBottom";
 import rehypeHighlight from "rehype-highlight";
 
 /** Chat messages: the list, each bubble, the reply being streamed, and the message box. */
@@ -309,6 +310,29 @@ export function Composer({
 }) {
   const [value, setValue] = useState("");
   const [pending, setPending] = useState<Pending[]>([]);
+
+  // The box grows with what you type, up to a limit (then it scrolls), and shrinks back after sending.
+  // Resized before paint (layout effect), so it never flashes at the wrong height.
+  const box = useRef<HTMLTextAreaElement | null>(null);
+  const setBox = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      box.current = el;
+      if (typeof ref === "function") ref(el);
+      else if (ref) (ref as React.RefObject<HTMLTextAreaElement | null>).current = el; // the parent's ref, too
+    },
+    [ref],
+  );
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const before = el.style.height;
+    el.style.height = "auto"; // back to its rows, to measure the text
+    const max = window.innerHeight * (compact ? 0.35 : 0.45);
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+    el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+    // Its new height is already laid out: the message list above can re-pin to its newest message.
+    if (el.style.height !== before) window.dispatchEvent(new Event(COMPOSER_RESIZED));
+  }, [value, compact]);
   const [dragging, setDragging] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
 
@@ -342,7 +366,7 @@ export function Composer({
   };
 
   return (
-    <div className={`relative ${compact ? "border-t border-line p-3" : "mx-auto w-full max-w-3xl px-6 pb-6"}`}>
+    <div className={`relative ${compact ? "p-3" : "mx-auto w-full max-w-3xl px-6 pb-6"}`}>
       {busy && (
         <button
           onClick={onStop}
@@ -378,7 +402,7 @@ export function Composer({
           </div>
         )}
         <textarea
-          ref={ref}
+          ref={setBox}
           value={value}
           autoFocus={autoFocus}
           rows={compact ? 2 : 3}

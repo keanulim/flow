@@ -3,6 +3,7 @@
 import type { RefObject } from "react";
 import type { Conversation } from "@/hooks/useConversation";
 import type { Attachment } from "@/lib/shared";
+import { useStickToBottom } from "@/hooks/useStickToBottom";
 import { Composer, MessageList, StreamingBubble } from "./Messages";
 
 const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
@@ -26,6 +27,8 @@ type Props = {
 /** The side panel: the focused thread's side threads, and the open one with its own message box. */
 export default function SidePanel({ conv, streaming, activity, send, stop, retry, onJumpToSource, onMouseUp, onClick, inputRef }: Props) {
   const { sideThreads, sideId, activeSide, activeIsOneOff, childrenOf, messagesOf, counts, setSideOpen, openThread, deleteThread, saveToMap, goTo, fork } = conv;
+
+  const stick = useStickToBottom(); // the message box grows: keep the newest messages in view
 
   return (
     <aside className="flex w-[420px] shrink-0 flex-col border-l border-line bg-panel">
@@ -65,7 +68,7 @@ export default function SidePanel({ conv, streaming, activity, send, stop, retry
 
       {activeSide ? (
         <>
-          <div onMouseUp={onMouseUp} onClick={onClick} className="flex-1 overflow-y-auto px-4 py-4">
+          <div ref={stick} onMouseUp={onMouseUp} onClick={onClick} className="flex-1 overflow-y-auto px-4 py-4">
             <div className="mb-4 flex items-start gap-2">
               <button
                 onClick={() => activeSide.forkMessageId && onJumpToSource(activeSide.forkMessageId)}

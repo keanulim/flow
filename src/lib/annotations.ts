@@ -1,5 +1,6 @@
 import { type EditorState, type Extension, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
+import { touches } from "./cursor";
 import { type LinkHost, refreshLinks } from "./wikilinks";
 
 /**
@@ -120,26 +121,18 @@ export function removeAnnotation(doc: string, id: string): TextChange[] {
 
 // ---------- in the editor ----------
 
-function activeLines(state: EditorState): Set<number> {
-  const lines = new Set<number>();
-  for (const r of state.selection.ranges) {
-    for (let n = state.doc.lineAt(r.from).number; n <= state.doc.lineAt(r.to).number; n++) lines.add(n);
-  }
-  return lines;
-}
 
 /** Highlights annotated words (markers hidden off the cursor's line), styles the notes at the end, and opens a note on click. */
 export function annotations(getHost: () => LinkHost): Extension[] {
   const decorate = (view: EditorView): DecorationSet => {
     const { state } = view;
     const { refs, defs } = parseAnnotations(state.doc.toString());
-    const active = activeLines(state);
     const decos: Range<Decoration>[] = [];
     for (const r of refs) {
       const missing = !defs.has(r.id);
       const attributes = { "data-annot": r.id, title: missing ? "This note is missing" : "Show note" };
       const cls = `cm-annot${missing ? " cm-annot-missing" : ""}`;
-      if (active.has(state.doc.lineAt(r.from).number)) {
+      if (touches(state, r.from, r.to)) {
         decos.push(Decoration.mark({ class: `${cls} cm-annot-raw`, attributes }).range(r.textFrom, r.textTo));
       } else {
         decos.push(Decoration.replace({}).range(r.from, r.textFrom));

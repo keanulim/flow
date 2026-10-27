@@ -1,6 +1,7 @@
 import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { type EditorState, type Extension, Prec, type Range, StateEffect } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
+import { touches } from "./cursor";
 import { maskInlineCode } from "./notes";
 
 /**
@@ -110,24 +111,16 @@ function scan(state: EditorState): { pages: Found[]; chats: FoundChat[]; embeds:
   return { pages, chats, embeds };
 }
 
-function activeLines(state: EditorState): Set<number> {
-  const lines = new Set<number>();
-  for (const r of state.selection.ranges) {
-    for (let n = state.doc.lineAt(r.from).number; n <= state.doc.lineAt(r.to).number; n++) lines.add(n);
-  }
-  return lines;
-}
 
 export function wikilinks(getHost: () => LinkHost): Extension[] {
   const decorate = (view: EditorView): DecorationSet => {
     const host = getHost();
-    const active = activeLines(view.state);
     const decos: Range<Decoration>[] = [];
     const { pages, chats, embeds } = scan(view.state);
     for (const e of embeds) {
       const widget = new EmbedWidget(e.target, host.imageUrl(e.target), e.width);
-      // On the cursor's line the source shows too (to edit it), with the image below it.
-      if (active.has(view.state.doc.lineAt(e.from).number)) {
+      // With the cursor on it, the source shows too (to edit it), with the image below it.
+      if (touches(view.state, e.from, e.to)) {
         decos.push(Decoration.mark({ class: "cm-embed-raw" }).range(e.from, e.to));
         decos.push(Decoration.widget({ widget, side: 1 }).range(e.to));
       } else decos.push(Decoration.replace({ widget }).range(e.from, e.to));
@@ -135,7 +128,7 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
     for (const c of chats) {
       const cls = `cm-chatlink${host.chatExists(c.id) ? "" : " cm-chatlink-missing"}`;
       const attributes = { "data-chat": c.id, title: host.chatExists(c.id) ? "Open chat" : "This chat no longer exists" };
-      if (active.has(view.state.doc.lineAt(c.from).number)) {
+      if (touches(view.state, c.from, c.to)) {
         decos.push(Decoration.mark({ class: `${cls} cm-wikilink-raw`, attributes }).range(c.from, c.to));
       } else {
         decos.push(Decoration.replace({}).range(c.from, c.labelFrom));
@@ -146,7 +139,7 @@ export function wikilinks(getHost: () => LinkHost): Extension[] {
     for (const l of pages) {
       const cls = `cm-wikilink${host.exists(l.target) ? "" : " cm-wikilink-new"}`;
       const attributes = { "data-link": l.target };
-      if (active.has(view.state.doc.lineAt(l.from).number)) {
+      if (touches(view.state, l.from, l.to)) {
         decos.push(Decoration.mark({ class: `${cls} cm-wikilink-raw`, attributes }).range(l.from, l.to));
       } else {
         decos.push(Decoration.replace({}).range(l.from, l.labelFrom));

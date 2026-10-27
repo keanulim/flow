@@ -6,6 +6,7 @@ import { Decoration, type DecorationSet, EditorView, keymap, placeholder, Widget
 import { tags } from "@lezer/highlight";
 import katex from "katex";
 import { ACCENTED } from "./accents";
+import { touches } from "./cursor";
 import { DISPLAY_LINE, DISPLAY_OPEN, displayClose, findInlineMath } from "./math";
 import { INDENT, indent, parseToggles, toggles } from "./toggles";
 import { annotations } from "./annotations";
@@ -14,8 +15,10 @@ import { type LinkHost, wikilinks } from "./wikilinks";
 /**
  * Obsidian-style live preview for Markdown, on top of CodeMirror 6.
  *
- * The file stays plain Markdown; only how it's *shown* changes. Markup hides
- * off the cursor's line and comes back on it, so it can still be edited:
+ * The file stays plain Markdown; only how it's *shown* changes. Markup shows
+ * only where you're editing: inline syntax (bold's **, a formula's LaTeX, a
+ * link's brackets) only while the cursor is in that piece of text, headings'
+ * # on their line, tables and code fences while the cursor is in them:
  *  - `#`..`######` headings render as headings.
  *  - Bold, italic, `code` and ~~strikethrough~~ are styled; `-` bullets show as •.
  *  - [Web links](https://…) and bare URLs are clickable; images show.
@@ -120,7 +123,7 @@ export function build(state: EditorState): DecorationSet {
   }
 
   inline(state, active, decos);
-  inlineMath(state, active, decos);
+  inlineMath(state, decos);
   // θ̂ typed as text: a font that puts the hat over the letter (see accents.ts).
   const text = doc.toString();
   if (/[\u0300-\u036F\u20D0-\u20FF]/.test(text)) {
@@ -160,25 +163,30 @@ function inline(state: EditorState, active: Set<number>, decos: Range<Decoration
         }
         case "EmphasisMark":
         case "CodeMark":
-        case "StrikethroughMark":
-          if (!active.has(lineOf(node.from))) decos.push(Decoration.replace({}).range(node.from, node.to));
+        case "StrikethroughMark": {
+          // The marks show only while the cursor is in that bold/italic/code/strikethrough text.
+          const whole = node.node.parent ?? node.node;
+          if (!touches(state, whole.from, whole.to)) decos.push(Decoration.replace({}).range(node.from, node.to));
           return;
+        }
         case "Escape": // \* -> *
-          if (!active.has(lineOf(node.from))) decos.push(Decoration.replace({}).range(node.from, node.from + 1));
+          if (!touches(state, node.from, node.to)) decos.push(Decoration.replace({}).range(node.from, node.from + 1));
           return;
         case "InlineCode":
           decos.push(Decoration.mark({ class: "cm-md-code" }).range(node.from, node.to));
           return; // its CodeMarks are hidden by the case above
         case "ListMark": {
           const mark = doc.sliceString(node.from, node.to);
-          if (active.has(lineOf(node.from))) return;
-          const isTask = !!node.node.parent?.getChild("Task"); // "- [ ] x": the checkbox replaces the bullet
+          const task = node.node.parent?.getChild("Task"); // "- [ ] x": the checkbox replaces the bullet
+          const isTask = !!task;
+          // The "-" (and "[ ]") show only with the cursor on them, not anywhere in the item's text.
+          if (touches(state, node.from, task?.getChild("TaskMarker")?.to ?? node.to)) return;
           if (/^[-*+]$/.test(mark)) decos.push(Decoration.replace(isTask ? {} : { widget: bullet }).range(node.from, isTask ? node.to + 1 : node.to));
           else decos.push(Decoration.mark({ class: "cm-md-olmark" }).range(node.from, node.to));
           return;
         }
         case "TaskMarker": {
-          if (active.has(lineOf(node.from))) return;
+          if (touches(state, doc.lineAt(node.from).from, node.to)) return;
           const done = /x/i.test(doc.sliceString(node.from, node.to));
           decos.push(Decoration.replace({ widget: new Checkbox(done) }).range(node.from, node.to));
           const end = doc.lineAt(node.from).to;
@@ -186,7 +194,7 @@ function inline(state: EditorState, active: Set<number>, decos: Range<Decoration
           return;
         }
         case "HorizontalRule":
-          if (active.has(lineOf(node.from))) return;
+          if (touches(state, node.from, node.to)) return;
           decos.push(Decoration.line({ class: "cm-md-hr" }).range(doc.lineAt(node.from).from));
           decos.push(Decoration.replace({}).range(node.from, node.to));
           return;
@@ -202,7 +210,7 @@ function inline(state: EditorState, active: Set<number>, decos: Range<Decoration
           const textTo = marks[1].from;
           if (textTo <= textFrom) return;
           const attributes = { "data-href": href, title: href };
-          if (active.has(lineOf(node.from))) {
+          if (touches(state, node.from, node.to)) {
             decos.push(Decoration.mark({ class: "cm-md-link cm-md-link-raw", attributes }).range(textFrom, textTo));
             return false;
           }
@@ -213,7 +221,7 @@ function inline(state: EditorState, active: Set<number>, decos: Range<Decoration
         }
         case "Image": {
           const url = node.node.getChild("URL");
-          if (!url || active.has(lineOf(node.from))) return false;
+          if (!url || touches(state, node.from, node.to)) return false;
           const src = doc.sliceString(url.from, url.to);
           const marks = node.node.getChildren("LinkMark");
           const alt = marks.length >= 2 ? doc.sliceString(marks[0].to, marks[1].from) : "";
@@ -225,7 +233,7 @@ function inline(state: EditorState, active: Set<number>, decos: Range<Decoration
           if (node.node.parent?.name === "Link" || node.node.parent?.name === "Image") return;
           const href = doc.sliceString(node.from, node.to).replace(/^<|>$/g, "");
           if (!SAFE_URL.test(href)) return false;
-          decos.push(Decoration.mark({ class: `cm-md-link${active.has(lineOf(node.from)) ? " cm-md-link-raw" : ""}`, attributes: { "data-href": href, title: href } }).range(node.from, node.to));
+          decos.push(Decoration.mark({ class: `cm-md-link${touches(state, node.from, node.to) ? " cm-md-link-raw" : ""}`, attributes: { "data-href": href, title: href } }).range(node.from, node.to));
           return false;
         }
       }
@@ -233,8 +241,8 @@ function inline(state: EditorState, active: Set<number>, decos: Range<Decoration
   });
 }
 
-/** $x$ and \(x\) off the cursor's line, drawn as formulas. Skips code blocks and display blocks (drawn above). */
-function inlineMath(state: EditorState, active: Set<number>, decos: Range<Decoration>[]) {
+/** $x$ and \(x\) drawn as formulas, except the one the cursor is in. Skips code blocks and display blocks (drawn above). */
+function inlineMath(state: EditorState, decos: Range<Decoration>[]) {
   const doc = state.doc;
   let fence = false;
   let display: RegExp | null = null;
@@ -251,9 +259,12 @@ function inlineMath(state: EditorState, active: Set<number>, decos: Range<Decora
       display = displayClose(open[1]);
       continue;
     }
-    if (active.has(n) || DISPLAY_LINE.test(text)) continue;
+    if (DISPLAY_LINE.test(text)) continue;
     const from = doc.line(n).from;
-    for (const m of findInlineMath(text)) decos.push(Decoration.replace({ widget: new MathWidget(m.tex, false) }).range(from + m.from, from + m.to));
+    for (const m of findInlineMath(text)) {
+      if (touches(state, from + m.from, from + m.to)) continue; // editing this formula: show its LaTeX
+      decos.push(Decoration.replace({ widget: new MathWidget(m.tex, false) }).range(from + m.from, from + m.to));
+    }
   }
 }
 

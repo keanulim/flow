@@ -1,8 +1,9 @@
 "use client";
 
-import type { RefObject } from "react";
+import { type RefObject, useCallback } from "react";
 import type { Conversation } from "@/hooks/useConversation";
 import type { Attachment } from "@/lib/shared";
+import { useStickToBottom } from "@/hooks/useStickToBottom";
 import { Composer, MessageList, StreamingBubble } from "./Messages";
 
 type Props = {
@@ -31,6 +32,15 @@ type Props = {
 export default function ThreadPane({ conv, streaming, activity, send, stop, retry, makingNote, onMakeNote, flashId, onJumpToSource, onMouseUp, onClick, onClickAnywhere, inputRef, scrollRef }: Props) {
   const { rootId, focus, focusThread, focusMessages, branches, showSide, sideId, lineage, goTo, goUp, fork, openThread } = conv;
   const nested = !!focusThread?.parentThreadId;
+  const stick = useStickToBottom(); // the message box grows: keep the newest messages in view
+  // Stable, so React doesn't re-attach it on every render (many per second while a reply streams).
+  const setScroll = useCallback(
+    (el: HTMLDivElement | null) => {
+      scrollRef.current = el;
+      stick(el);
+    },
+    [scrollRef, stick],
+  );
 
   return (
     <main className="relative flex min-w-0 flex-1 flex-col" onClick={onClickAnywhere}>
@@ -78,7 +88,12 @@ export default function ThreadPane({ conv, streaming, activity, send, stop, retr
           </button>
         </header>
       )}
-      <div ref={scrollRef} onMouseUp={onMouseUp} onClick={onClick} className="flex-1 overflow-y-auto">
+      <div
+        ref={setScroll}
+        onMouseUp={onMouseUp}
+        onClick={onClick}
+        className="flex-1 overflow-y-auto"
+      >
         {/* Extra room at the bottom, so the last reply can scroll clear of the fade */}
         <div className="mx-auto max-w-3xl px-6 pt-8 pb-12">
           {!rootId && <p className="mt-24 text-center text-muted">Start a conversation. Side questions stay out of its way.</p>}

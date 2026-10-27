@@ -5,6 +5,7 @@ import { postChat } from "@/lib/chat-stream";
 import { api } from "@/lib/client";
 import { type Attachment, EMPTY_REPLY, STOPPED_NOTE, withSources } from "@/lib/shared";
 import { Bubble, Composer, StreamingBubble } from "./chat/Messages";
+import { useStickToBottom } from "@/hooks/useStickToBottom";
 
 type Turn = { id: string; role: "user" | "assistant"; content: string; attachments?: Attachment[] };
 
@@ -38,6 +39,8 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
   const [undo, setUndo] = useState<{ turnId: string; before: string | null; created: string[] } | null>(null);
   const [createdBy, setCreatedBy] = useState<Record<string, string[]>>({}); // pages each reply created (this session), shown under it
   const [creating, setCreating] = useState<string[]>([]); // pages created by the reply in progress
+  const [width, resize] = usePanelWidth();
+  const stick = useStickToBottom(); // the message box grows: keep the newest messages in view
   const input = useRef<HTMLTextAreaElement>(null);
   const aborter = useRef<AbortController | null>(null);
 
@@ -146,7 +149,18 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
   const empty = turns !== null && turns.length === 0 && streaming === null;
 
   return (
-    <aside className="flex w-[380px] shrink-0 flex-col border-l border-line bg-panel" aria-label="AI assistant">
+    <aside style={{ width }} className="relative flex shrink-0 flex-col border-l border-line bg-panel" aria-label="AI assistant">
+      {/* Drag the left edge to resize; double-click it to reset */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        title="Drag to resize · double-click to reset"
+        onPointerDown={resize.start}
+        onDoubleClick={resize.reset}
+        className="group absolute inset-y-0 -left-1.5 z-10 w-3 cursor-col-resize"
+      >
+        <div className="absolute inset-y-0 left-1/2 w-px group-hover:w-0.5 group-hover:bg-line-strong" />
+      </div>
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4 text-sm">
         <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
         {turns && turns.length > 0 && (
@@ -163,7 +177,7 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
         </button>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div ref={stick} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {empty ? (
           <div className="flex h-full flex-col justify-end pb-4">
             <p className="text-lg font-semibold">How can I help with this note?</p>
@@ -209,4 +223,47 @@ function CreatedPages({ paths, onOpen }: { paths: string[]; onOpen: (path: strin
       ))}
     </div>
   );
+}
+
+const WIDTH_KEY = "flow.assistant.width";
+const DEFAULT_WIDTH = 380;
+const MIN_WIDTH = 320;
+const MIN_NOTE = 400; // the note beside it never gets narrower than this
+
+/** The panel's width, resizable by dragging its left edge and remembered in this browser. */
+function usePanelWidth(): [number, { start: (e: React.PointerEvent) => void; reset: () => void }] {
+  const [width, setWidth] = useState(DEFAULT_WIDTH);
+  const clamp = (w: number) => Math.round(Math.max(MIN_WIDTH, Math.min(w, window.innerWidth - MIN_NOTE)));
+  // Read after mount (there's no localStorage on the server).
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem(WIDTH_KEY));
+      if (saved) setWidth(clamp(saved));
+    } catch {}
+  }, []);
+  const save = (w: number) => {
+    setWidth(w);
+    try {
+      localStorage.setItem(WIDTH_KEY, String(w));
+    } catch {}
+  };
+  const start = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const right = (handle.parentElement as HTMLElement).getBoundingClientRect().right; // the panel's right edge stays put
+    let latest = width;
+    const move = (ev: PointerEvent) => setWidth((latest = clamp(right - ev.clientX)));
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+      save(latest);
+    };
+    document.body.style.cursor = "col-resize";
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  };
+  return [width, { start, reset: () => save(DEFAULT_WIDTH) }];
 }
