@@ -1,6 +1,6 @@
 import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
-import { deleteNoteChats, moveNoteChats } from "@/lib/db";
+import { moveAssistantNotes } from "@/lib/db";
 import { listNotes, listOtherFiles } from "@/lib/notes";
 import { type Files, relinkNote } from "@/lib/relink";
 import { createEntry, listVault, moveEntry, placeEntry, readNote, trashEntry, VaultError, type VaultEntry, writeNote } from "@/lib/vault";
@@ -37,7 +37,7 @@ async function handlePATCH(req: Request) {
     const beforeList = await listVault();
     const path = typeof folder === "string" ? await placeEntry(from, folder, before) : await moveEntry(from, to ?? "");
     if (path === from) return { path, relinked: [] };
-    moveNoteChats(from, path); // a note's assistant conversation follows it
+    moveAssistantNotes(from, path); // the assistant's earlier messages keep naming the right page
     return { path, relinked: await relinkVault(beforeList, from, path) };
   });
 }
@@ -79,7 +79,6 @@ async function handleDELETE(req: Request) {
   const p = new URL(req.url).searchParams.get("path") ?? "";
   return handle(async () => {
     await trashEntry(p);
-    deleteNoteChats(p);
     return undefined;
   });
 }

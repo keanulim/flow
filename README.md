@@ -30,6 +30,7 @@ The chat itself has the things you'd expect, plus a few you'd want:
 
 On the Home side there's a notes app that works on a folder of Markdown files, so it plays nicely with Obsidian. Point `FLOW_VAULT_PATH` at an existing vault and it just works.
 
+- **Tabs.** Double-click a note (or right-click → Open in new tab) to open it in a tab of its own. A plain click opens it in the current tab, like Obsidian. Drag tabs to reorder them.
 - **Live preview editing.** One editor, no edit/preview toggle. Markdown renders as you type and the raw syntax shows up only on the line you're editing. Tables, task lists, code blocks and math all render.
 - **`[[Links]]` between notes**, with suggestions as you type `[[`. You can also link to chats, which show up in light red with a line on top.
 - **Toggles.** Start a line with `/>` to make a collapsible section.
@@ -38,7 +39,7 @@ On the Home side there's a notes app that works on a folder of Markdown files, s
 
 ### The note assistant
 
-The λ button in the bottom right opens an AI panel for the note you're looking at. Each note keeps its own conversation, separate from your chats, and the assistant can actually **edit the note**: reorganize it, add to it, brainstorm into it. You can watch the edits land live, and **Undo changes** puts it back.
+The λ button in the bottom right opens an AI panel beside your notes. It's one conversation, separate from your chats, that stays put as you move between notes. It always knows which note you have open and can actually **edit it**: reorganize it, add to it, brainstorm into it. You can watch the edits land live, and **Undo changes** puts it back.
 
 It also knows what's around the note:
 - notes linked with `[[…]]` are sent along automatically,

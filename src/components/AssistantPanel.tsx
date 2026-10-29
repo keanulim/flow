@@ -7,16 +7,17 @@ import { type Attachment, EMPTY_REPLY, STOPPED_NOTE, withSources } from "@/lib/s
 import { Bubble, Composer, StreamingBubble } from "./chat/Messages";
 import { useStickToBottom } from "@/hooks/useStickToBottom";
 
-type Turn = { id: string; role: "user" | "assistant"; content: string; attachments?: Attachment[] };
+/** notePath: the note that was open when it was sent. */
+type Turn = { id: string; notePath: string; role: "user" | "assistant"; content: string; attachments?: Attachment[] };
 
 type Props = {
-  /** The open note. The conversation belongs to it, and the assistant can edit it. */
+  /** The open note: the one the assistant sees and can edit. The conversation itself carries on across notes. */
   notePath: string;
   /** Save pending edits in the note before the assistant reads it. */
   onBeforeSend: () => Promise<void>;
-  /** While the assistant works: show the note read-only with this text (null: done, reload the saved note). */
-  onLive: (markdown: string | null) => void;
-  /** The note changed on disk outside the editor (undo): load it again. */
+  /** While the assistant works: show note `path` read-only with this text (null: done, reload the saved note). */
+  onLive: (markdown: string | null, path: string) => void;
+  /** A note changed on disk outside the editor (undo): load it again. */
   onReload: () => void;
   /** The assistant created or removed pages: reload the file list. */
   onFilesChanged: () => void;
@@ -27,16 +28,17 @@ type Props = {
 };
 
 /**
- * The AI assistant beside a note (the lambda button, bottom right). Each note
- * has its own conversation, kept out of Chats, and the assistant can edit the
- * note: reorganize it, add to it, brainstorm into it.
+ * The AI assistant beside notes (the lambda button, bottom right). It's one
+ * conversation, kept out of Chats, that stays put as you move between notes;
+ * each message goes with the note open at the time, which the assistant can
+ * edit: reorganize it, add to it, brainstorm into it.
  */
 export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReload, onFilesChanged, onOpenNote, onClose, onError }: Props) {
   const [turns, setTurns] = useState<Turn[] | null>(null); // null while loading
   const [streaming, setStreaming] = useState<string | null>(null); // reply so far, while it works
   const [activity, setActivity] = useState<string | undefined>(); // "Editing the note"
-  // The last reply's changes, reversible: the note before it (null: unchanged) and the pages it created.
-  const [undo, setUndo] = useState<{ turnId: string; before: string | null; created: string[] } | null>(null);
+  // The last reply's changes, reversible: the note it edited, as it was before (null: unchanged), and the pages it created.
+  const [undo, setUndo] = useState<{ turnId: string; path: string; before: string | null; created: string[] } | null>(null);
   const [createdBy, setCreatedBy] = useState<Record<string, string[]>>({}); // pages each reply created (this session), shown under it
   const [creating, setCreating] = useState<string[]>([]); // pages created by the reply in progress
   const [width, resize] = usePanelWidth();
@@ -44,33 +46,33 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
   const input = useRef<HTMLTextAreaElement>(null);
   const aborter = useRef<AbortController | null>(null);
 
-  // Each note has its own conversation.
+  // One conversation for every note: loaded when the panel opens, not again on switching notes.
   useEffect(() => {
     let cancelled = false;
-    setTurns(null);
-    setUndo(null);
-    api(`/api/notes/assist?path=${encodeURIComponent(notePath)}`)
+    api("/api/notes/assist")
       .then((r) => r.json())
       .then((t: Turn[]) => !cancelled && setTurns(t))
       .catch((e) => !cancelled && (onError(e), setTurns([])));
     return () => {
       cancelled = true;
-      aborter.current?.abort(); // switching notes stops a reply in progress
+      aborter.current?.abort(); // closing the panel stops a reply in progress
     };
-  }, [notePath, onError]);
+  }, [onError]);
 
   const send = async (message: string, files: Attachment[] = []) => {
+    // The note open now: a reply carries on editing it even if you switch to another one meanwhile.
+    const path = notePath;
     let before: string;
     try {
       await onBeforeSend(); // the file on disk is now what the editor shows
-      before = ((await (await api(`/api/files/content?path=${encodeURIComponent(notePath)}`)).json()) as { content: string }).content;
+      before = ((await (await api(`/api/files/content?path=${encodeURIComponent(path)}`)).json()) as { content: string }).content;
     } catch (e) {
       return onError(e);
     }
     setUndo(null);
-    setTurns((t) => [...(t ?? []), { id: crypto.randomUUID(), role: "user", content: message.trim(), ...(files.length ? { attachments: files } : {}) }]);
+    setTurns((t) => [...(t ?? []), { id: crypto.randomUUID(), notePath: path, role: "user", content: message.trim(), ...(files.length ? { attachments: files } : {}) }]);
     setStreaming("");
-    onLive(before); // read-only while the assistant works, so typing can't collide with its edits
+    onLive(before, path); // read-only while the assistant works, so typing can't collide with its edits
     const abort = (aborter.current = new AbortController());
     let text = "";
     let changed = false;
@@ -78,7 +80,7 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
     let reply: string | null = null;
     try {
       const done = await postChat(
-        { path: notePath, content: before, message, attachments: files.map((f) => f.id) },
+        { path, content: before, message, attachments: files.map((f) => f.id) },
         {
           onText: (t) => {
             text += t;
@@ -88,7 +90,7 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
           onStatus: setActivity,
           onNote: (content) => {
             changed = true;
-            onLive(content); // watch the edit land
+            onLive(content, path); // watch the edit land
           },
           onCreated: (path) => {
             created.push(path);
@@ -105,22 +107,22 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
       else onError(e);
     }
     const id = crypto.randomUUID();
-    if (reply !== null) setTurns((t) => [...(t ?? []), { id, role: "assistant", content: reply }]);
-    if (changed || created.length) setUndo({ turnId: id, before: changed ? before : null, created });
+    if (reply !== null) setTurns((t) => [...(t ?? []), { id, notePath: path, role: "assistant", content: reply }]);
+    if (changed || created.length) setUndo({ turnId: id, path, before: changed ? before : null, created });
     if (changed) onFilesChanged(); // an image the edit removed may have gone to the trash
     if (created.length) setCreatedBy((c) => ({ ...c, [id]: created }));
     setCreating([]);
     setStreaming(null);
     setActivity(undefined);
-    onLive(null); // done: the editor loads the saved note
+    onLive(null, path); // done: the editor loads the saved note
   };
 
-  /** Put the note back, and move the pages the reply created to the vault's trash. */
+  /** Put the edited note back, and move the pages the reply created to the vault's trash. */
   const undoEdit = async () => {
     if (!undo) return;
     try {
       if (undo.before !== null) {
-        await api("/api/files/content", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: notePath, content: undo.before }) });
+        await api("/api/files/content", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: undo.path, content: undo.before }) });
       }
       for (const p of undo.created) await api(`/api/files?path=${encodeURIComponent(p)}`, { method: "DELETE" });
       const { turnId } = undo;
@@ -136,7 +138,7 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
   const startOver = async () => {
     aborter.current?.abort();
     try {
-      await api(`/api/notes/assist?path=${encodeURIComponent(notePath)}`, { method: "DELETE" });
+      await api("/api/notes/assist", { method: "DELETE" });
     } catch (e) {
       return onError(e);
     }
@@ -164,7 +166,7 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4 text-sm">
         <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
         {turns && turns.length > 0 && (
-          <button onClick={() => void startOver()} className="rounded-md px-1.5 py-1 text-muted hover:bg-hover hover:text-fg" title="New conversation for this note" aria-label="New conversation">
+          <button onClick={() => void startOver()} className="rounded-md px-1.5 py-1 text-muted hover:bg-hover hover:text-fg" title="New conversation" aria-label="New conversation">
             <svg className="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
               <path d="M8 3v10M3 8h10" />
             </svg>
@@ -181,12 +183,14 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
         {empty ? (
           <div className="flex h-full flex-col justify-end pb-4">
             <p className="text-lg font-semibold">How can I help with this note?</p>
-            <p className="mt-1 text-sm text-muted">Ask me to add to it, reorganize it, brainstorm in it, or split it into new pages. I&apos;ll edit the note directly. You can attach images, PDFs and text files too.</p>
+            <p className="mt-1 text-sm text-muted">Ask me to add to it, reorganize it, brainstorm in it, or split it into new pages. I&apos;ll edit whichever note you have open, and the conversation stays the same as you move between notes. You can attach images, PDFs and text files too.</p>
           </div>
         ) : (
           <>
-            {turns?.map((t) => (
+            {turns?.map((t, i) => (
               <div key={t.id} className="mb-4">
+                {/* Where the conversation moved to another note */}
+                {t.role === "user" && t.notePath !== turns.slice(0, i).findLast((u) => u.role === "user")?.notePath && <NoteMarker path={t.notePath} onOpen={onOpenNote} />}
                 <Bubble message={t} compact />
                 {createdBy[t.id]?.length ? <CreatedPages paths={createdBy[t.id]} onOpen={onOpenNote} /> : null}
                 {undo?.turnId === t.id && (
@@ -208,6 +212,19 @@ export default function AssistantPanel({ notePath, onBeforeSend, onLive, onReloa
 
       <Composer ref={input} busy={streaming !== null} placeholder="Ask about or edit this note…" onSend={(text, files) => void send(text, files)} onStop={() => aborter.current?.abort()} compact autoFocus attachments />
     </aside>
+  );
+}
+
+/** The note a message was sent from, shown where the conversation moves to a different one. */
+function NoteMarker({ path, onOpen }: { path: string; onOpen: (path: string) => void }) {
+  return (
+    <div className="mb-2 flex items-center gap-2 text-xs text-muted">
+      <div className="h-px flex-1 bg-line" />
+      <button onClick={() => onOpen(path)} title={path} className="max-w-[70%] truncate hover:text-fg">
+        {path.split("/").pop()!.replace(/\.md$/i, "")}
+      </button>
+      <div className="h-px flex-1 bg-line" />
+    </div>
   );
 }
 

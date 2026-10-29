@@ -1,7 +1,7 @@
 import { sandboxed } from "@/lib/sandbox-route";
 import { NextResponse } from "next/server";
 import { attachmentBlocks, resolveAttachments } from "@/lib/attachments";
-import { addNoteChatMessage, clearNoteChat, getNoteChat } from "@/lib/db";
+import { addAssistantMessage, clearAssistantChat, getAssistantChat } from "@/lib/db";
 import { streamNoteAssistant } from "@/lib/llm";
 import { linkedPages, listNotes, type NoteInfo, resolveNote } from "@/lib/notes";
 import { type ChatEvent, EMPTY_REPLY, errorNote, type Source, STOPPED_NOTE, withSources } from "@/lib/shared";
@@ -9,25 +9,22 @@ import { saveNote } from "@/lib/note-images";
 import { createNoteWithContent, listVault, readNote, VaultError } from "@/lib/vault";
 
 /**
- * The AI assistant beside a note. Each note has its own conversation (kept out
- * of Chats), and the assistant can edit the note itself.
+ * The AI assistant beside notes. It has one conversation (kept out of Chats)
+ * that carries on as you move between notes, and it can edit whichever note
+ * is open when you send a message.
  *
- * GET ?path=    the note's conversation
- * DELETE ?path= start it over
- * POST { path, content, message, attachments? }: answer, streaming newline-delimited JSON
- *   events (text, status, the note's new text after each edit, pages it created). `content`
- *   is the note as the editor has it; the edited note is saved when done.
+ * GET    the conversation
+ * DELETE start it over
+ * POST { path, content, message, attachments? }: answer about the open note `path`, streaming
+ *   newline-delimited JSON events (text, status, the note's new text after each edit, pages it
+ *   created). `content` is the note as the editor has it; the edited note is saved when done.
  */
-async function handleGET(req: Request) {
-  const path = new URL(req.url).searchParams.get("path");
-  if (!path) return NextResponse.json({ error: "path is required" }, { status: 400 });
-  return NextResponse.json(getNoteChat(path));
+async function handleGET() {
+  return NextResponse.json(getAssistantChat());
 }
 
-async function handleDELETE(req: Request) {
-  const path = new URL(req.url).searchParams.get("path");
-  if (!path) return NextResponse.json({ error: "path is required" }, { status: 400 });
-  clearNoteChat(path);
+async function handleDELETE() {
+  clearAssistantChat();
   return new NextResponse(null, { status: 204 });
 }
 
@@ -51,11 +48,12 @@ async function handlePOST(req: Request) {
   }
   const mock = process.env.NODE_ENV !== "production" && !!req.headers.get("x-flow-mock");
   // Earlier turns' files are sent again each time (the API keeps nothing between requests).
+  // Each earlier message says which note was open then, since the conversation spans notes.
   const history = await Promise.all(
-    getNoteChat(path).map(async ({ role, content, attachments: files }) => ({
-      role,
-      content: files?.length ? [...(await attachmentBlocks(files)), ...(content ? [{ type: "text" as const, text: content }] : [])] : content,
-    })),
+    getAssistantChat().map(async ({ role, content, notePath, attachments: files }) => {
+      const said = role === "user" ? `<open_note path="/${notePath}" />\n${content}` : content;
+      return { role, content: files?.length ? [...(await attachmentBlocks(files)), { type: "text" as const, text: said }] : said };
+    }),
   );
   const files = await attachmentBlocks(attachments);
   const notes = listNotes(await listVault());
@@ -79,7 +77,7 @@ async function handlePOST(req: Request) {
       throw new Error(e instanceof VaultError ? (e.status === 404 ? `There's no folder "${folder}"` : e.message) : "the file couldn't be written");
     }
   };
-  addNoteChatMessage(path, "user", text, attachments);
+  addAssistantMessage(path, "user", text, attachments);
 
   const stop = new AbortController();
   req.signal.addEventListener("abort", () => stop.abort());
@@ -127,7 +125,7 @@ async function handlePOST(req: Request) {
         // Keep what was edited, even if the reply was stopped or failed partway.
         // (Through saveNote, so images the edit removed are tidied up like a hand edit.)
         if (changed) await saveNote(path, note).catch((e) => console.error("[note assistant] save failed", e));
-        addNoteChatMessage(path, "assistant", withSources(reply, sources) + (stopped ? STOPPED_NOTE : "") || EMPTY_REPLY);
+        addAssistantMessage(path, "assistant", withSources(reply, sources) + (stopped ? STOPPED_NOTE : "") || EMPTY_REPLY);
         try {
           controller.close();
         } catch {}

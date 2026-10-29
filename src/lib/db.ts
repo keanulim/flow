@@ -113,6 +113,18 @@ function migrate(db: Database.Database) {
   `);
   const noteCols = new Set((db.prepare(`PRAGMA table_info(note_chat_messages)`).all() as { name: string }[]).map((c) => c.name));
   if (!noteCols.has("attachments")) db.exec(`ALTER TABLE note_chat_messages ADD COLUMN attachments TEXT`);
+  // Since then the assistant has one conversation across all notes; each message records the note
+  // that was open. (The old per-note conversations above are kept, unused, rather than merged.)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS assistant_messages (
+      id          TEXT PRIMARY KEY,
+      note_path   TEXT NOT NULL,
+      role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content     TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      attachments TEXT
+    );
+  `);
 }
 
 
@@ -301,26 +313,27 @@ export function addMessage(threadId: string, role: Role, content: string, id: st
 /** Ids of every file some message still has attached (the rest can be deleted). */
 export function referencedAttachmentIds(): Set<string> {
   const rows = conn()
-    .prepare(`SELECT attachments FROM messages WHERE attachments IS NOT NULL UNION ALL SELECT attachments FROM note_chat_messages WHERE attachments IS NOT NULL`)
+    .prepare(`SELECT attachments FROM messages WHERE attachments IS NOT NULL UNION ALL SELECT attachments FROM note_chat_messages WHERE attachments IS NOT NULL UNION ALL SELECT attachments FROM assistant_messages WHERE attachments IS NOT NULL`)
     .all() as { attachments: string }[];
   return new Set(rows.flatMap((r) => (JSON.parse(r.attachments) as Attachment[]).map((a) => a.id)));
 }
 
-// ---------- the assistant beside a note (one conversation per note path) ----------
+// ---------- the assistant beside notes (one conversation across all of them) ----------
 
-export type NoteChatMessage = { id: string; role: Role; content: string; createdAt: number; attachments?: Attachment[] };
+/** notePath: the note that was open when the message was sent (the one the assistant could edit). */
+export type AssistantMessage = { id: string; notePath: string; role: Role; content: string; createdAt: number; attachments?: Attachment[] };
 
-export function getNoteChat(notePath: string): NoteChatMessage[] {
+export function getAssistantChat(): AssistantMessage[] {
   return (
     conn()
-      .prepare(`SELECT id, role, content, created_at AS createdAt, attachments FROM note_chat_messages WHERE note_path = ? ORDER BY created_at, rowid`)
-      .all(notePath) as (Omit<NoteChatMessage, "attachments"> & { attachments: string | null })[]
+      .prepare(`SELECT id, note_path AS notePath, role, content, created_at AS createdAt, attachments FROM assistant_messages ORDER BY created_at, rowid`)
+      .all() as (Omit<AssistantMessage, "attachments"> & { attachments: string | null })[]
   ).map(({ attachments, ...m }) => (attachments ? { ...m, attachments: JSON.parse(attachments) as Attachment[] } : m));
 }
 
-export function addNoteChatMessage(notePath: string, role: Role, content: string, attachments: Attachment[] = []): NoteChatMessage {
-  const msg = { id: crypto.randomUUID(), role, content, createdAt: Date.now(), ...(attachments.length ? { attachments } : {}) };
-  conn().prepare(`INSERT INTO note_chat_messages (id, note_path, role, content, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?)`).run(
+export function addAssistantMessage(notePath: string, role: Role, content: string, attachments: Attachment[] = []): AssistantMessage {
+  const msg = { id: crypto.randomUUID(), notePath, role, content, createdAt: Date.now(), ...(attachments.length ? { attachments } : {}) };
+  conn().prepare(`INSERT INTO assistant_messages (id, note_path, role, content, created_at, attachments) VALUES (?, ?, ?, ?, ?, ?)`).run(
     msg.id,
     notePath,
     role,
@@ -331,20 +344,15 @@ export function addNoteChatMessage(notePath: string, role: Role, content: string
   return msg;
 }
 
-/** Start the note's conversation over. */
-export function clearNoteChat(notePath: string) {
-  conn().prepare(`DELETE FROM note_chat_messages WHERE note_path = ?`).run(notePath);
+/** Start the conversation over. */
+export function clearAssistantChat() {
+  conn().prepare(`DELETE FROM assistant_messages`).run();
 }
 
-/** A note or folder was renamed or moved: its notes' conversations follow. */
-export function moveNoteChats(from: string, to: string) {
+/** A note or folder was renamed or moved: messages about its notes follow, so earlier turns name the right page. */
+export function moveAssistantNotes(from: string, to: string) {
   conn().prepare(
-    `UPDATE note_chat_messages SET note_path = ? || substr(note_path, length(?) + 1)
+    `UPDATE assistant_messages SET note_path = ? || substr(note_path, length(?) + 1)
      WHERE note_path = ? OR note_path LIKE ? ESCAPE '\\'`,
   ).run(to, from, from, from.replace(/[\\%_]/g, (c) => "\\" + c) + "/%");
-}
-
-/** A note or folder was deleted: so are its notes' conversations. */
-export function deleteNoteChats(notePath: string) {
-  conn().prepare(`DELETE FROM note_chat_messages WHERE note_path = ? OR note_path LIKE ? ESCAPE '\\'`).run(notePath, notePath.replace(/[\\%_]/g, (c) => "\\" + c) + "/%");
 }

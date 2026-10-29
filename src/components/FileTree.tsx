@@ -10,6 +10,8 @@ type Props = {
   activePath: string | null;
   filter: string; // from the sidebar search box
   onOpen: (path: string) => void;
+  /** Open a note in a new tab (double-click, or right-click → Open in new tab). */
+  onOpenInTab: (path: string) => void;
   onCreate: (parent: string, type: "file" | "folder") => Promise<string | null>; // returns the new path
   onRename: (path: string, newName: string) => Promise<void>;
   /** Put entries in `folder` ("" = top level), just before the item named `before` (null = at the end), in this order. */
@@ -24,7 +26,8 @@ const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")
 const label = (e: VaultEntry) => (e.type === "file" ? e.name.replace(/\.md$/i, "") : e.name);
 
 /**
- * The vault's notes as a folder tree (images aren't listed), Obsidian style: click to open, drag to arrange
+ * The vault's notes as a folder tree (images aren't listed), Obsidian style: click to open (double-click:
+ * in a new tab), drag to arrange
  * (between rows, or into a folder; the empty area is the end of the top level). Right-click for rename and
  * delete (to the vault's .trash), and on folders or the empty area, new note /
  * new folder. Clicking a folder selects it as the
@@ -35,7 +38,7 @@ const label = (e: VaultEntry) => (e.type === "file" ? e.name.replace(/\.md$/i, "
  * to add or remove one. Drag any selected row to move them all; right-click
  * one to delete them all. Esc or a click on the empty area clears it.
  */
-export default function FileTree({ entries: all, activePath, filter, onOpen, onCreate, onRename, onPlace, onDelete }: Props) {
+export default function FileTree({ entries: all, activePath, filter, onOpen, onOpenInTab, onCreate, onRename, onPlace, onDelete }: Props) {
   // Notes and folders only: images live in the vault for the notes that show them, but aren't listed.
   const entries = useMemo(() => notesOnly(all), [all]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -292,6 +295,9 @@ export default function FileTree({ entries: all, activePath, filter, onOpen, onC
               onOpen(e.path);
             }
           }}
+          onDoubleClick={(ev) => {
+            if (!isFolder && !ev.shiftKey && !ev.metaKey && !ev.ctrlKey) onOpenInTab(e.path);
+          }}
           onContextMenu={(ev) => {
             ev.preventDefault();
             ev.stopPropagation();
@@ -384,6 +390,7 @@ export default function FileTree({ entries: all, activePath, filter, onOpen, onC
               <div
                 key={e.path}
                 onClick={() => onOpen(e.path)}
+                onDoubleClick={() => onOpenInTab(e.path)}
                 className={`cursor-pointer rounded-md px-2.5 py-1.5 text-[13px] leading-5 ${e.path === activePath ? "bg-hover text-fg" : "text-muted hover:bg-hover hover:text-fg"}`}
               >
                 <div className="truncate">{label(e)}</div>
@@ -415,9 +422,10 @@ export default function FileTree({ entries: all, activePath, filter, onOpen, onC
                   { label: "New folder", run: () => void create("folder", menu.entry?.path ?? "") },
                 ]
               : []),
+            ...(menu.entry?.type === "file" ? [{ label: "Open in new tab", run: () => onOpenInTab(menu.entry!.path) }] : []),
             ...(menu.entry
               ? [
-                  { label: "Rename", run: () => setRenaming(menu.entry!.path), separator: menu.entry.type === "folder" },
+                  { label: "Rename", run: () => setRenaming(menu.entry!.path), separator: true },
                   { label: "Delete", run: () => remove(menu.entry!), danger: true },
                 ]
               : []),

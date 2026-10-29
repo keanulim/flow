@@ -19,6 +19,7 @@ import Sidebar from "./Sidebar";
 import ContextMenu from "./ContextMenu";
 import Settings from "./Settings";
 import AssistantPanel from "./AssistantPanel";
+import NoteTabs from "./NoteTabs";
 import LambdaMark from "./LambdaMark";
 
 // The notes editor (CodeMirror) is only downloaded once a note is opened, so
@@ -159,12 +160,6 @@ export default function Flow({ demo = false }: { demo?: boolean }) {
     openFresh(HOME_PATH);
   }, [rootId, setRootId, editor, loadFiles, openFresh, loadChatIndex, report]);
 
-  // The last note open other than Home, for coming back to Files.
-  const lastNote = useRef<string | null>(null);
-  useEffect(() => {
-    if (openNote && openNote !== HOME_PATH) lastNote.current = openNote;
-  }, [openNote]);
-
   /** Files: list the files and show the last note open there (none: an empty page, not Home). */
   const goToFiles = useCallback(async () => {
     navSeq.current++;
@@ -176,7 +171,7 @@ export default function Flow({ demo = false }: { demo?: boolean }) {
     // Pick the note from the list we already have, then switch the main area and
     // the note in one update. (Switching first and picking after reloading the
     // list showed Home, still the open note from before, for a moment.)
-    const back = lastNote.current;
+    const back = vault.lastTab(); // the tab shown last
     const known = files ?? [];
     const exists = !!back && (listNotes(known).some((n) => n.path === back) || listOtherFiles(known).some((f) => f.path === back));
     setHome(true);
@@ -184,7 +179,7 @@ export default function Flow({ demo = false }: { demo?: boolean }) {
     openFresh(exists ? back : null);
     void loadChatIndex();
     void loadFiles();
-  }, [home, openNote, rootId, setRootId, editor, files, loadFiles, loadChatIndex, openFresh]);
+  }, [home, openNote, rootId, setRootId, editor, files, loadFiles, loadChatIndex, openFresh, vault]);
 
   // Following a link out of Home (or opening a note any other way) brings the file list back.
   useEffect(() => {
@@ -290,8 +285,8 @@ export default function Flow({ demo = false }: { demo?: boolean }) {
     await editor.current?.flush();
   }, [editor]);
   const setAssistantLive = useCallback(
-    (markdown: string | null) => setLiveNote(markdown === null || !openNote ? null : { path: openNote, markdown, label: "AI is editing…" }),
-    [openNote],
+    (markdown: string | null, path: string) => setLiveNote(markdown === null ? null : { path, markdown, label: "AI is editing…" }),
+    [],
   );
   const reloadNote = useCallback(() => setNoteVersion((v) => v + 1), []);
   onRelinked.current = reloadNote;
@@ -499,8 +494,8 @@ export default function Flow({ demo = false }: { demo?: boolean }) {
   const onMapExit = useCallback(() => mainInput.current?.focus(), []);
 
   const fileActions = useMemo(
-    () => ({ onOpen: openFresh, onCreate: vault.createEntry, onRename: vault.renameEntry, onPlace: vault.placeEntries, onDelete: vault.deleteEntries }),
-    [openFresh, vault.createEntry, vault.renameEntry, vault.placeEntries, vault.deleteEntries],
+    () => ({ onOpen: vault.openFromSidebar, onOpenInTab: vault.openInTab, onCreate: vault.createEntry, onRename: vault.renameEntry, onPlace: vault.placeEntries, onDelete: vault.deleteEntries }),
+    [vault.openFromSidebar, vault.openInTab, vault.createEntry, vault.renameEntry, vault.placeEntries, vault.deleteEntries],
   );
 
   // ---------- render ----------
@@ -547,7 +542,12 @@ export default function Flow({ demo = false }: { demo?: boolean }) {
       />
 
       {home ? (
-        <>
+        <div className="flex min-w-0 flex-1 flex-col">
+        {/* Open notes as tabs (not on the Home note) */}
+        {!onHomeNote && vault.tabs.length > 0 && (
+          <NoteTabs tabs={vault.tabs} active={openNote && vault.tabs.includes(openNote) ? openNote : vault.lastTab()} onSelect={(p) => void vault.selectTab(p)} onClose={(p) => void vault.closeTab(p)} onMove={vault.moveTab} />
+        )}
+        <div className="flex min-h-0 flex-1">
         <main className="min-w-0 flex-1">
           {openNote && isNotePath(openNote) ? (
             <NoteEditor
@@ -580,6 +580,7 @@ export default function Flow({ demo = false }: { demo?: boolean }) {
             onError={report}
           />
         )}
+        </div>
         {/* The AI assistant button (bottom right), for the open note */}
         {!assistantOpen && openNote && isNotePath(openNote) && (
           <button
@@ -591,7 +592,7 @@ export default function Flow({ demo = false }: { demo?: boolean }) {
             <LambdaMark className="size-4" />
           </button>
         )}
-        </>
+        </div>
       ) : (
         <>
           <ThreadPane

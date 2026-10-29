@@ -315,11 +315,12 @@ Outside demo mode none of this applies: no sandbox, data in `data/` as always. S
 - `[[links]]` with suggestions, chat links, web links, and the link picker for selected text.
 - Toggles, task lists, tables, code blocks, math, embedded images.
 - **Notes on text:** right-click selected words → Add note…; click the highlighted words later to see, edit or remove it. Stored as Obsidian highlight + standard footnote, so it stays plain Markdown. The note lines at the end of the file are hidden in the editor (they show as text only if the cursor goes into them).
+- **Tabs**, Obsidian style: clicking a note (or following a link) shows it in the current tab; double-click it in the sidebar, or right-click → Open in new tab, to give it a tab of its own. × or a middle-click closes a tab; drag tabs to reorder them. Tabs follow renames and moves, close when their note is deleted, and are remembered in the browser.
 - **Home:** a page of its own (the sidebar is empty there), seeded with a welcome guide.
 - A "← back" trail when following links (⌘⌥←).
 
 ### The note assistant (λ button, bottom right)
-- One conversation per note, kept out of Chats; it follows the note when renamed or moved and is deleted with it.
+- One conversation across all notes, kept out of Chats; it doesn't change as you switch notes. Each message records the note that was open (shown as a divider where it changes), the latest message brings that note in full, and only that note can be edited. A reply in progress keeps editing its note even if you switch away.
 - Edits the note live, reads linked and other notes, searches the web, takes attachments, creates new pages.
 - Undo reverts everything from the last reply.
 
@@ -349,7 +350,8 @@ All of this is git-ignored, so your data never ends up on GitHub.
 |---|---|---|
 | `threads` | id, parent_thread_id, fork_message_id, anchor_text, title, kind, auto_titled, created_at | `parent_thread_id` null = a main thread. Deleting cascades to branches. |
 | `messages` | id, thread_id, role, content, created_at, attachments | `attachments` is JSON metadata. Deleting a message cascades to branches forked from it. |
-| `note_chat_messages` | id, note_path, role, content, created_at, attachments | The assistant's conversation per note path. |
+| `assistant_messages` | id, note_path, role, content, created_at, attachments | The assistant's one conversation; note_path is the note open at the time (follows renames). |
+| `note_chat_messages` | id, note_path, role, content, created_at, attachments | Old per-note conversations, kept but no longer used. |
 
 **Migrations:** `CREATE TABLE IF NOT EXISTS` never changes an existing table, so new columns are added in `migrate()` with `ALTER TABLE` when missing. It runs on every module load because in dev the connection survives hot reloads.
 
@@ -394,7 +396,7 @@ All of this is git-ignored, so your data never ends up on GitHub.
 |---|---|
 | `useConversation.ts` | The open conversation's tree, focus, side panel, navigation, branching. |
 | `useStreaming.ts` | Sending, streaming replies, Stop, Retry. |
-| `useVault.ts` | The file list, the open note, the link trail, file operations, adding images. |
+| `useVault.ts` | The file list, the open note, the link trail, tabs, file operations, adding images. |
 | `useChatIndex.ts` | All chat titles, for `[[` suggestions and chat links. |
 
 ### `src/components/`
@@ -408,6 +410,7 @@ All of this is git-ignored, so your data never ends up on GitHub.
 | `chat/ThreadPane.tsx` | The center chat. |
 | `chat/SidePanel.tsx` | Side threads. |
 | `chat/Messages.tsx` | Message list, bubbles, streaming bubble, attachments, the message box. |
+| `NoteTabs.tsx` | The tab bar above notes. |
 | `NoteEditor.tsx` | A note: header, autosave, live writing. |
 | `MarkdownEditor.tsx` | The CodeMirror instance; right-click menu; the link picker. |
 | `LinkPicker.tsx` | Link selected text to a page, chat or web address. |
@@ -520,6 +523,7 @@ Real bugs from building this, with what each one teaches.
 | Oct 21 | Renames and moves keep links working. Math in tables; code blocks line up inside toggles. |
 | Oct 21 | Demo mode for a public deployment: simulated AI, a private seeded sandbox per visitor, synced through Redis on Vercel. Next.js and React security patches. |
 | Oct 20 | Notes on text: highlight words, attach a note, click to see it. Everything switched to Haiku 5.5. Fixed math rendering in chats and accented letters (θ̂). Images removed from pages go to the trash. Drag to arrange files. |
+| Oct 29 | The note assistant became one conversation across notes (it still sees and edits the open one). Tabs for notes. |
 | | *Add new entries here.* |
 
 ---

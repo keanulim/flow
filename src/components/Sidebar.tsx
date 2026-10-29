@@ -41,7 +41,7 @@ type Props = {
   /** On Home: the vault's files and what to do with them. */
   files: VaultEntry[] | null;
   activeNote: string | null;
-  fileActions: Pick<React.ComponentProps<typeof FileTree>, "onOpen" | "onCreate" | "onRename" | "onPlace" | "onDelete">;
+  fileActions: Pick<React.ComponentProps<typeof FileTree>, "onOpen" | "onOpenInTab" | "onCreate" | "onRename" | "onPlace" | "onDelete">;
   /** In chats: the conversation list (already filtered by search) and the map below it. */
   conversations: Thread[];
   searching: boolean;
